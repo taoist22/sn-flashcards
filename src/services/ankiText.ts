@@ -286,3 +286,11 @@ export const pickImportTextFile = async () => {
     text: (await readTextFile(path)) ?? '',
   };
 };
+
+export const listImportTextFiles = async () =>
+  (await FileUtils.getFileList(['.txt', '.tsv', '.csv'])) ?? [];
+
+export const readImportTextFile = async (path: string) => ({
+  path,
+  text: (await readTextFile(path)) ?? '',
+});

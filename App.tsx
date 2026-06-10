@@ -31,14 +31,15 @@ import {getRetrievability, ratingLabels, stateLabel} from './src/services/fsrsSc
 import type {Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
 import {
   exportDeckToTsv,
+  listImportTextFiles,
   parseCardText,
-  pickImportTextFile,
+  readImportTextFile,
 } from './src/services/ankiText';
 
 const MAIN_BUTTON_ID = 100;
 const LASSO_BUTTON_ID = 200;
 
-type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture';
+type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture' | 'import';
 
 const emptyDraft: OcrFlashcardDraft = {
   question: '',
@@ -55,6 +56,7 @@ function App(): React.JSX.Element {
   const [showAnswer, setShowAnswer] = useState(false);
   const [studyGuess, setStudyGuess] = useState('');
   const [newDeckName, setNewDeckName] = useState('');
+  const [importFiles, setImportFiles] = useState<string[]>([]);
 
   const selectedDeck = useMemo(
     () => db?.decks.find(deck => deck.id === selectedDeckId) ?? db?.decks[0],
@@ -192,14 +194,31 @@ function App(): React.JSX.Element {
     }
   };
 
-  const importTextDeck = async () => {
+  const openImportFiles = async () => {
     try {
-      const fallbackDeckName = selectedDeck?.name ?? 'Imported';
-      const picked = await pickImportTextFile();
-      if (!picked) {
+      const files = await listImportTextFiles();
+      if (files.length === 0) {
+        Alert.alert(
+          'No import files found',
+          'No .txt, .tsv, or .csv files were found on the device.',
+        );
         return;
       }
 
+      setImportFiles(files);
+      setScreen('import');
+    } catch (error) {
+      Alert.alert(
+        'Import failed',
+        error instanceof Error ? error.message : 'Could not search for files.',
+      );
+    }
+  };
+
+  const importTextDeck = async (path: string) => {
+    try {
+      const fallbackDeckName = selectedDeck?.name ?? 'Imported';
+      const picked = await readImportTextFile(path);
       const rows = parseCardText(picked.text, fallbackDeckName);
       if (rows.length === 0) {
         Alert.alert('No cards found', 'The file did not contain question/answer rows.');
@@ -217,6 +236,7 @@ function App(): React.JSX.Element {
           `${result.summary.createdDecks} decks created`,
         ].join('\n'),
       );
+      setScreen('cards');
     } catch (error) {
       Alert.alert(
         'Import failed',
@@ -296,7 +316,7 @@ function App(): React.JSX.Element {
               setDraft(emptyDraft);
               setScreen('capture');
             }}
-            onImport={importTextDeck}
+            onOpenImport={openImportFiles}
             onExport={exportSelectedDeck}
             onEdit={card => {
               setEditingCard(card);
@@ -339,6 +359,10 @@ function App(): React.JSX.Element {
             }}
             onRate={rateStudyCard}
           />
+        )}
+
+        {screen === 'import' && (
+          <ImportScreen files={importFiles} onImport={importTextDeck} />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -409,7 +433,7 @@ function CardsScreen({
   dueCount,
   onStudy,
   onManualAdd,
-  onImport,
+  onOpenImport,
   onExport,
   onEdit,
   onDelete,
@@ -420,7 +444,7 @@ function CardsScreen({
   dueCount: number;
   onStudy: () => void;
   onManualAdd: () => void;
-  onImport: () => void;
+  onOpenImport: () => void;
   onExport: () => void;
   onEdit: (card: Flashcard) => void;
   onDelete: (card: Flashcard) => void;
@@ -439,7 +463,7 @@ function CardsScreen({
         <PrimaryButton label={dueCount > 0 ? 'Study Due' : 'Study'} onPress={onStudy} />
         <SecondaryButton label="Add Manually" onPress={onManualAdd} />
         <View style={styles.actionRow}>
-          <SecondaryButton label="Import Anki Text" onPress={onImport} />
+          <SecondaryButton label="Import Anki Text" onPress={onOpenImport} />
           <SecondaryButton label="Export Deck" onPress={onExport} />
         </View>
       </View>
@@ -470,6 +494,35 @@ function CardsScreen({
           );
         })
       )}
+    </View>
+  );
+}
+
+function ImportScreen({
+  files,
+  onImport,
+}: {
+  files: string[];
+  onImport: (path: string) => void;
+}) {
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Import Anki Text</Text>
+      <Text style={styles.emptyText}>
+        Choose an Anki plain text export. Files ending in .txt, .tsv, or .csv are shown.
+      </Text>
+      <View style={styles.fileList}>
+        {files.map(path => (
+          <Pressable key={path} onPress={() => onImport(path)} style={styles.rowCard}>
+            <View style={styles.rowMain}>
+              <Text style={styles.cardTitle}>{fileName(path)}</Text>
+              <Text style={styles.muted} numberOfLines={2}>
+                {path}
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -700,6 +753,8 @@ const formatDate = (value: string) => {
   return date.toLocaleDateString();
 };
 
+const fileName = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path;
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -904,6 +959,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 23,
     color: '#4d534d',
+  },
+  fileList: {
+    marginTop: 14,
   },
   loadingRow: {
     flexDirection: 'row',
