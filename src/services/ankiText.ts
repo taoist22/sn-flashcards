@@ -5,7 +5,11 @@ import type {
   FlashcardDatabase,
   ImportCardInput,
 } from '../types/flashcards';
-import {readTextFile, writeTextFile} from './nativeStorage';
+import {
+  listImportTextFiles as listNativeImportTextFiles,
+  readTextFile,
+  writeTextFile,
+} from './nativeStorage';
 import {fingerprintCard} from './store';
 
 const HEADERS = ['Deck', 'Question', 'Answer', 'ExternalId', 'UpdatedAt'];
@@ -288,7 +292,7 @@ export const pickImportTextFile = async () => {
 };
 
 export const listImportTextFiles = async () =>
-  (await FileUtils.getFileList(['.txt', '.tsv', '.csv'])) ?? [];
+  (await listNativeImportTextFiles()) ?? [];
 
 export const readImportTextFile = async (path: string) => ({
   path,

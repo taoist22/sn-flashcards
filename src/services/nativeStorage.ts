@@ -5,6 +5,7 @@ type FlashcardStorageModule = {
   writeDatabase(json: string): Promise<boolean>;
   readTextFile(path: string): Promise<string | null>;
   writeTextFile(path: string, text: string): Promise<boolean>;
+  listImportTextFiles(): Promise<string[]>;
 };
 
 const storage = NativeModules.FlashcardStorage as
@@ -47,4 +48,12 @@ export const writeTextFile = async (path: string, text: string) => {
   }
 
   return storage.writeTextFile(path, text);
+};
+
+export const listImportTextFiles = async () => {
+  if (!storage) {
+    return [];
+  }
+
+  return storage.listImportTextFiles();
 };
