@@ -1,0 +1,10 @@
+{
+  "name": "SupernoteFlashcards",
+  "desc": "Decks, handwritten flashcard capture, and FSRS study scheduling for Supernote.",
+  "iconPath": "",
+  "versionName": "0.0.1",
+  "versionCode": "1",
+  "pluginID": "cbaqdgf2m4b4y7op",
+  "pluginKey": "SupernoteFlashcards",
+  "jsMainPath": "index"
+}
