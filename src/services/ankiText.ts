@@ -2,7 +2,6 @@ import {FileUtils, RattaFileSelector} from 'sn-plugin-lib';
 import type {
   Deck,
   Flashcard,
-  FlashcardDatabase,
   ImportCardInput,
 } from '../types/flashcards';
 import {
@@ -12,8 +11,6 @@ import {
 } from './nativeStorage';
 import {fingerprintCard} from './store';
 
-const HEADERS = ['Deck', 'Question', 'Answer', 'ExternalId', 'UpdatedAt'];
-
 const cleanCell = (value: string) =>
   value
     .replace(/\r\n/g, '\n')
@@ -21,7 +18,8 @@ const cleanCell = (value: string) =>
     .replace(/\t/g, ' ')
     .trim();
 
-const escapeCell = (value: string) => cleanCell(value).replace(/\n/g, '<br>');
+const escapeAnkiPlainTextCell = (value: string) =>
+  cleanCell(value).replace(/\n/g, ' ');
 
 const unescapeCell = (value: string) =>
   value
@@ -233,7 +231,7 @@ export const parseCardText = (
     .filter(row => row.question.trim() && row.answer.trim());
 };
 
-export const buildDeckTsv = (
+export const buildAnkiPlainTextExport = (
   deck: Deck,
   cards: Flashcard[],
 ) => {
@@ -241,17 +239,22 @@ export const buildDeckTsv = (
     const externalId =
       card.externalId || fingerprintCard(deck.name, card.question, card.answer);
     return [
+      externalId,
       deck.name,
       card.question,
       card.answer,
-      externalId,
-      card.externalUpdatedAt || card.updatedAt,
     ]
-      .map(escapeCell)
+      .map(escapeAnkiPlainTextCell)
       .join('\t');
   });
 
-  return [HEADERS.join('\t'), ...rows].join('\n') + '\n';
+  return [
+    '#separator:tab',
+    '#html:false',
+    '#guid column:1',
+    '#deck column:2',
+    ...rows,
+  ].join('\n') + '\n';
 };
 
 const safeFileName = (value: string) =>
@@ -261,14 +264,13 @@ const safeFileName = (value: string) =>
     .replace(/\s+/g, '_')
     .slice(0, 48) || 'Deck';
 
-export const exportDeckToTsv = async (
-  db: FlashcardDatabase,
+export const exportDeckToAnkiText = async (
   deck: Deck,
   cards: Flashcard[],
 ) => {
   const exportPath = await FileUtils.getExportPath();
-  const filePath = `${exportPath}/${safeFileName(deck.name)}.tsv`;
-  await writeTextFile(filePath, buildDeckTsv(deck, cards));
+  const filePath = `${exportPath}/${safeFileName(deck.name)}-anki.txt`;
+  await writeTextFile(filePath, buildAnkiPlainTextExport(deck, cards));
   return filePath;
 };
 

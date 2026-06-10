@@ -30,7 +30,7 @@ import {createDraftFromLasso, type OcrFlashcardDraft} from './src/services/lasso
 import {getRetrievability, ratingLabels, stateLabel} from './src/services/fsrsScheduler';
 import type {Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
 import {
-  exportDeckToTsv,
+  exportDeckToAnkiText,
   listImportTextFiles,
   parseCardText,
   readImportTextFile,
@@ -184,7 +184,7 @@ function App(): React.JSX.Element {
     }
 
     try {
-      const filePath = await exportDeckToTsv(requireDb(), selectedDeck, deckCards);
+      const filePath = await exportDeckToAnkiText(selectedDeck, deckCards);
       Alert.alert('Deck exported', `Saved to:\n${filePath}`);
     } catch (error) {
       Alert.alert(
