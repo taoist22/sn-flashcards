@@ -62,6 +62,52 @@ const splitDelimitedLine = (line: string, delimiter: string) => {
 const normalizeHeader = (value: string) =>
   value.trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '');
 
+type AnkiDirectives = {
+  delimiter?: string;
+  guidColumn?: number;
+  deckColumn?: number;
+  tagsColumn?: number;
+  noteTypeColumn?: number;
+};
+
+const parseColumnDirective = (line: string, name: string) => {
+  const pattern = new RegExp(`^#${name} column:(\\d+)$`, 'i');
+  const match = line.trim().match(pattern);
+  if (!match) {
+    return undefined;
+  }
+
+  return Number(match[1]) - 1;
+};
+
+const parseAnkiDirectives = (lines: string[]): AnkiDirectives => {
+  const directives: AnkiDirectives = {};
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separator = trimmed.match(/^#separator:(.+)$/i)?.[1];
+    if (separator) {
+      directives.delimiter =
+        separator.toLocaleLowerCase() === 'tab' ? '\t' : separator;
+    }
+
+    directives.guidColumn =
+      parseColumnDirective(trimmed, 'guid') ?? directives.guidColumn;
+    directives.deckColumn =
+      parseColumnDirective(trimmed, 'deck') ?? directives.deckColumn;
+    directives.tagsColumn =
+      parseColumnDirective(trimmed, 'tags') ?? directives.tagsColumn;
+    directives.noteTypeColumn =
+      parseColumnDirective(trimmed, 'notetype') ?? directives.noteTypeColumn;
+  }
+
+  return directives;
+};
+
 const hasHeader = (cells: string[]) => {
   const headers = cells.map(normalizeHeader);
   return (
@@ -96,19 +142,51 @@ export const parseCardText = (
     return [];
   }
 
-  const delimiter = rawLines[0].includes('\t') ? '\t' : ',';
-  const firstCells = splitDelimitedLine(rawLines[0], delimiter);
+  const directives = parseAnkiDirectives(rawLines);
+  const dataLines = rawLines.filter(line => !line.trim().startsWith('#'));
+  if (dataLines.length === 0) {
+    return [];
+  }
+
+  const delimiter =
+    directives.delimiter ?? (dataLines[0].includes('\t') ? '\t' : ',');
+  const firstCells = splitDelimitedLine(dataLines[0], delimiter);
   const headered = hasHeader(firstCells);
   const headers = headered ? firstCells.map(normalizeHeader) : [];
   const headerMap = headers.reduce<Record<string, number>>((map, header, index) => {
     map[header] = index;
     return map;
   }, {});
-  const lines = headered ? rawLines.slice(1) : rawLines;
+  const lines = headered ? dataLines.slice(1) : dataLines;
+  const specialColumns = [
+    directives.guidColumn,
+    directives.deckColumn,
+    directives.tagsColumn,
+    directives.noteTypeColumn,
+  ].filter((value): value is number => typeof value === 'number');
 
   return lines
     .map(line => {
       const cells = splitDelimitedLine(line, delimiter);
+      if (!headered && specialColumns.length > 0) {
+        const contentCells = cells.filter(
+          (_, index) => !specialColumns.includes(index),
+        );
+
+        return {
+          deckName:
+            typeof directives.deckColumn === 'number'
+              ? cells[directives.deckColumn] || fallbackDeckName
+              : fallbackDeckName,
+          question: contentCells[0] ?? '',
+          answer: contentCells[1] ?? '',
+          externalId:
+            typeof directives.guidColumn === 'number'
+              ? cells[directives.guidColumn]
+              : undefined,
+        };
+      }
+
       if (headered) {
         return {
           deckName:
