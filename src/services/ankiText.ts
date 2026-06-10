@@ -4,11 +4,7 @@ import type {
   Flashcard,
   ImportCardInput,
 } from '../types/flashcards';
-import {
-  listImportTextFiles as listNativeImportTextFiles,
-  readTextFile,
-  writeTextFile,
-} from './nativeStorage';
+import {readTextFile, writeTextFile} from './nativeStorage';
 import {fingerprintCard} from './store';
 
 const cleanCell = (value: string) =>
@@ -276,10 +272,9 @@ export const exportDeckToAnkiText = async (
 
 export const pickImportTextFile = async () => {
   const selected = await RattaFileSelector.selectFile({
-    selectType: 1,
-    suffixList: ['.txt', '.tsv', '.csv'],
+    selectType: 0,
     maxNum: 1,
-    title: 'Import Flashcards',
+    title: 'Import Anki Text',
     rightButtonText: 'Import',
   });
   const path = selected?.[0];
@@ -287,16 +282,17 @@ export const pickImportTextFile = async () => {
     return null;
   }
 
+  const lowerPath = path.toLocaleLowerCase();
+  if (
+    !lowerPath.endsWith('.txt') &&
+    !lowerPath.endsWith('.tsv') &&
+    !lowerPath.endsWith('.csv')
+  ) {
+    throw new Error('Choose an Anki .txt, .tsv, or .csv text export.');
+  }
+
   return {
     path,
     text: (await readTextFile(path)) ?? '',
   };
 };
-
-export const listImportTextFiles = async () =>
-  (await listNativeImportTextFiles()) ?? [];
-
-export const readImportTextFile = async (path: string) => ({
-  path,
-  text: (await readTextFile(path)) ?? '',
-});
