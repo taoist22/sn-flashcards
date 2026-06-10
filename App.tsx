@@ -439,7 +439,7 @@ function CardsScreen({
         <PrimaryButton label={dueCount > 0 ? 'Study Due' : 'Study'} onPress={onStudy} />
         <SecondaryButton label="Add Manually" onPress={onManualAdd} />
         <View style={styles.actionRow}>
-          <SecondaryButton label="Import TSV" onPress={onImport} />
+          <SecondaryButton label="Import Anki Text" onPress={onImport} />
           <SecondaryButton label="Export Deck" onPress={onExport} />
         </View>
       </View>

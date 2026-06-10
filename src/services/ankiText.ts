@@ -271,7 +271,7 @@ export const exportDeckToTsv = async (
 export const pickImportTextFile = async () => {
   const selected = await RattaFileSelector.selectFile({
     selectType: 1,
-    suffixList: ['tsv', 'csv', 'txt'],
+    suffixList: ['.txt', '.tsv', '.csv'],
     maxNum: 1,
     title: 'Import Flashcards',
     rightButtonText: 'Import',
