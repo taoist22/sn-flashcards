@@ -1,5 +1,9 @@
 # Flashcards for Supernote
 
+
+https://github.com/user-attachments/assets/618ab801-f4fe-4a61-95de-a6d03889f61b
+
+
 Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and Manta. It lets you create decks, add cards manually, turn lassoed handwriting into question/answer cards with OCR, study with FSRS scheduling, and move basic text cards between the plugin and Anki Desktop.
 
 > **Beta notice:** This plugin is built for Supernote's beta plugin system and beta development OS. Keep backups of important decks, expect occasional rough edges, and test new workflows with a small deck before relying on them heavily.
