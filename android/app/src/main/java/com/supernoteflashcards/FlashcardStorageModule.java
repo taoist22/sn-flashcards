@@ -4,6 +4,7 @@ import android.os.Environment;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
@@ -131,6 +132,27 @@ public class FlashcardStorageModule extends ReactContextBaseJavaModule {
             promise.resolve(result);
         } catch (Exception error) {
             promise.reject("FLASHCARD_LIST_IMPORT_FILES_FAILED", error);
+        }
+    }
+
+    @ReactMethod
+    public void listTextFilesInDirectories(ReadableArray paths, Promise promise) {
+        try {
+            WritableArray result = Arguments.createArray();
+            if (paths == null) {
+                promise.resolve(result);
+                return;
+            }
+
+            for (int index = 0; index < paths.size(); index++) {
+                String path = paths.getString(index);
+                if (path != null && path.length() > 0) {
+                    scanTextFiles(new File(path), result);
+                }
+            }
+            promise.resolve(result);
+        } catch (Exception error) {
+            promise.reject("FLASHCARD_LIST_IMPORT_DIRECTORIES_FAILED", error);
         }
     }
 

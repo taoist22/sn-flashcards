@@ -31,14 +31,16 @@ import {getRetrievability, ratingLabels, stateLabel} from './src/services/fsrsSc
 import type {Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
 import {
   exportDeckToAnkiText,
+  getImportDropFolder,
+  listImportDropFolderFiles,
   parseCardText,
-  pickImportTextFile,
+  readImportTextFile,
 } from './src/services/ankiText';
 
 const MAIN_BUTTON_ID = 100;
 const LASSO_BUTTON_ID = 200;
 
-type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture';
+type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture' | 'import';
 
 const emptyDraft: OcrFlashcardDraft = {
   question: '',
@@ -55,6 +57,8 @@ function App(): React.JSX.Element {
   const [showAnswer, setShowAnswer] = useState(false);
   const [studyGuess, setStudyGuess] = useState('');
   const [newDeckName, setNewDeckName] = useState('');
+  const [importFiles, setImportFiles] = useState<string[]>([]);
+  const [importFolder, setImportFolder] = useState('');
 
   const selectedDeck = useMemo(
     () => db?.decks.find(deck => deck.id === selectedDeckId) ?? db?.decks[0],
@@ -192,13 +196,24 @@ function App(): React.JSX.Element {
     }
   };
 
-  const importTextDeck = async () => {
+  const openImportDropFolder = async () => {
+    try {
+      const result = await listImportDropFolderFiles();
+      setImportFiles(result.files);
+      setImportFolder(result.dropFolder);
+      setScreen('import');
+    } catch (error) {
+      const dropFolder = await getImportDropFolder();
+      setImportFiles([]);
+      setImportFolder(dropFolder);
+      setScreen('import');
+    }
+  };
+
+  const importTextDeck = async (path: string) => {
     try {
       const fallbackDeckName = selectedDeck?.name ?? 'Imported';
-      const picked = await pickImportTextFile();
-      if (!picked) {
-        return;
-      }
+      const picked = await readImportTextFile(path);
 
       const rows = parseCardText(picked.text, fallbackDeckName);
       if (rows.length === 0) {
@@ -297,7 +312,7 @@ function App(): React.JSX.Element {
               setDraft(emptyDraft);
               setScreen('capture');
             }}
-            onImport={importTextDeck}
+            onImport={openImportDropFolder}
             onExport={exportSelectedDeck}
             onEdit={card => {
               setEditingCard(card);
@@ -341,8 +356,58 @@ function App(): React.JSX.Element {
             onRate={rateStudyCard}
           />
         )}
+
+        {screen === 'import' && (
+          <ImportScreen
+            files={importFiles}
+            folder={importFolder}
+            onRefresh={openImportDropFolder}
+            onImport={importTextDeck}
+          />
+        )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function ImportScreen({
+  files,
+  folder,
+  onRefresh,
+  onImport,
+}: {
+  files: string[];
+  folder: string;
+  onRefresh: () => void;
+  onImport: (path: string) => void;
+}) {
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Import Anki Text</Text>
+      <Text style={styles.emptyText}>
+        Put Anki plain text exports in this folder, then refresh:
+      </Text>
+      <Text style={styles.pathText}>{folder}</Text>
+      <View style={styles.actions}>
+        <SecondaryButton label="Refresh" onPress={onRefresh} />
+      </View>
+      {files.length === 0 ? (
+        <Text style={styles.emptyText}>No .txt, .tsv, or .csv files found there yet.</Text>
+      ) : (
+        <View style={styles.fileList}>
+          {files.map(path => (
+            <Pressable key={path} onPress={() => onImport(path)} style={styles.rowCard}>
+              <View style={styles.rowMain}>
+                <Text style={styles.cardTitle}>{fileName(path)}</Text>
+                <Text style={styles.muted} numberOfLines={2}>
+                  {path}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -701,6 +766,8 @@ const formatDate = (value: string) => {
   return date.toLocaleDateString();
 };
 
+const fileName = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path;
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -905,6 +972,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 23,
     color: '#4d534d',
+  },
+  pathText: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d7d7ce',
+    borderRadius: 8,
+    color: '#1f2623',
+    fontSize: 15,
+    lineHeight: 21,
+    marginVertical: 12,
+    padding: 12,
+  },
+  fileList: {
+    marginTop: 14,
   },
   loadingRow: {
     flexDirection: 'row',

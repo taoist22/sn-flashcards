@@ -1,10 +1,14 @@
-import {FileUtils, RattaFileSelector} from 'sn-plugin-lib';
+import {FileUtils, PluginManager, RattaFileSelector} from 'sn-plugin-lib';
 import type {
   Deck,
   Flashcard,
   ImportCardInput,
 } from '../types/flashcards';
-import {readTextFile, writeTextFile} from './nativeStorage';
+import {
+  listTextFilesInDirectories,
+  readTextFile,
+  writeTextFile,
+} from './nativeStorage';
 import {fingerprintCard} from './store';
 
 const cleanCell = (value: string) =>
@@ -296,3 +300,28 @@ export const pickImportTextFile = async () => {
     text: (await readTextFile(path)) ?? '',
   };
 };
+
+export const getImportDropFolder = async () => {
+  const exportPath = await FileUtils.getExportPath();
+  const dropFolder = `${exportPath}/sn-flashcards`;
+  await FileUtils.makeDir(dropFolder);
+  return dropFolder;
+};
+
+export const listImportDropFolderFiles = async () => {
+  const dropFolder = await getImportDropFolder();
+  const pluginDir = (await PluginManager.getPluginDirPath()) ?? '';
+  const files = await listTextFilesInDirectories(
+    [dropFolder, pluginDir].filter(Boolean),
+  );
+
+  return {
+    dropFolder,
+    files,
+  };
+};
+
+export const readImportTextFile = async (path: string) => ({
+  path,
+  text: (await readTextFile(path)) ?? '',
+});
