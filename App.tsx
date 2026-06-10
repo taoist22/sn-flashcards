@@ -21,6 +21,7 @@ import {
   deleteCard,
   deleteDeck,
   dueCardsForDeck,
+  importCards,
   loadDatabase,
   reviewCard,
   updateCard,
@@ -28,6 +29,11 @@ import {
 import {createDraftFromLasso, type OcrFlashcardDraft} from './src/services/lassoOcr';
 import {getRetrievability, ratingLabels, stateLabel} from './src/services/fsrsScheduler';
 import type {Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
+import {
+  exportDeckToTsv,
+  parseCardText,
+  pickImportTextFile,
+} from './src/services/ankiText';
 
 const MAIN_BUTTON_ID = 100;
 const LASSO_BUTTON_ID = 200;
@@ -170,6 +176,55 @@ function App(): React.JSX.Element {
     setDb(next);
   };
 
+  const exportSelectedDeck = async () => {
+    if (!selectedDeck) {
+      return;
+    }
+
+    try {
+      const filePath = await exportDeckToTsv(requireDb(), selectedDeck, deckCards);
+      Alert.alert('Deck exported', `Saved to:\n${filePath}`);
+    } catch (error) {
+      Alert.alert(
+        'Export failed',
+        error instanceof Error ? error.message : 'Could not export this deck.',
+      );
+    }
+  };
+
+  const importTextDeck = async () => {
+    try {
+      const fallbackDeckName = selectedDeck?.name ?? 'Imported';
+      const picked = await pickImportTextFile();
+      if (!picked) {
+        return;
+      }
+
+      const rows = parseCardText(picked.text, fallbackDeckName);
+      if (rows.length === 0) {
+        Alert.alert('No cards found', 'The file did not contain question/answer rows.');
+        return;
+      }
+
+      const result = await importCards(requireDb(), rows, fallbackDeckName);
+      setDb(result.db);
+      Alert.alert(
+        'Import complete',
+        [
+          `${result.summary.addedCards} added`,
+          `${result.summary.updatedCards} updated`,
+          `${result.summary.skippedCards} skipped`,
+          `${result.summary.createdDecks} decks created`,
+        ].join('\n'),
+      );
+    } catch (error) {
+      Alert.alert(
+        'Import failed',
+        error instanceof Error ? error.message : 'Could not import that file.',
+      );
+    }
+  };
+
   const rateStudyCard = async (rating: Grade) => {
     if (!activeStudyCard) {
       return;
@@ -241,6 +296,8 @@ function App(): React.JSX.Element {
               setDraft(emptyDraft);
               setScreen('capture');
             }}
+            onImport={importTextDeck}
+            onExport={exportSelectedDeck}
             onEdit={card => {
               setEditingCard(card);
               setScreen('edit');
@@ -352,6 +409,8 @@ function CardsScreen({
   dueCount,
   onStudy,
   onManualAdd,
+  onImport,
+  onExport,
   onEdit,
   onDelete,
 }: {
@@ -361,6 +420,8 @@ function CardsScreen({
   dueCount: number;
   onStudy: () => void;
   onManualAdd: () => void;
+  onImport: () => void;
+  onExport: () => void;
   onEdit: (card: Flashcard) => void;
   onDelete: (card: Flashcard) => void;
 }) {
@@ -377,6 +438,10 @@ function CardsScreen({
       <View style={styles.actions}>
         <PrimaryButton label={dueCount > 0 ? 'Study Due' : 'Study'} onPress={onStudy} />
         <SecondaryButton label="Add Manually" onPress={onManualAdd} />
+        <View style={styles.actionRow}>
+          <SecondaryButton label="Import TSV" onPress={onImport} />
+          <SecondaryButton label="Export Deck" onPress={onExport} />
+        </View>
       </View>
 
       <Text style={styles.sectionTitle}>Cards</Text>
@@ -830,6 +895,10 @@ const styles = StyleSheet.create({
   actions: {
     gap: 10,
     marginBottom: 18,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
   },
   emptyText: {
     fontSize: 16,

@@ -54,16 +54,61 @@ public class FlashcardStorageModule extends ReactContextBaseJavaModule {
     public void writeDatabase(String json, Promise promise) {
         try {
             File file = new File(reactContext.getFilesDir(), FILE_NAME);
-            FileOutputStream output = new FileOutputStream(file, false);
-            try {
-                output.write(json.getBytes(StandardCharsets.UTF_8));
-                output.flush();
-                promise.resolve(true);
-            } finally {
-                output.close();
-            }
+            writeFile(file, json);
+            promise.resolve(true);
         } catch (Exception error) {
             promise.reject("FLASHCARD_WRITE_FAILED", error);
+        }
+    }
+
+    @ReactMethod
+    public void readTextFile(String path, Promise promise) {
+        try {
+            File file = new File(path);
+            if (!file.exists()) {
+                promise.resolve(null);
+                return;
+            }
+
+            byte[] bytes = new byte[(int) file.length()];
+            FileInputStream input = new FileInputStream(file);
+            try {
+                int read = input.read(bytes);
+                if (read < 0) {
+                    promise.resolve("");
+                    return;
+                }
+                promise.resolve(new String(bytes, 0, read, StandardCharsets.UTF_8));
+            } finally {
+                input.close();
+            }
+        } catch (Exception error) {
+            promise.reject("FLASHCARD_READ_TEXT_FAILED", error);
+        }
+    }
+
+    @ReactMethod
+    public void writeTextFile(String path, String text, Promise promise) {
+        try {
+            File file = new File(path);
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            writeFile(file, text);
+            promise.resolve(true);
+        } catch (Exception error) {
+            promise.reject("FLASHCARD_WRITE_TEXT_FAILED", error);
+        }
+    }
+
+    private void writeFile(File file, String text) throws Exception {
+        FileOutputStream output = new FileOutputStream(file, false);
+        try {
+            output.write(text.getBytes(StandardCharsets.UTF_8));
+            output.flush();
+        } finally {
+            output.close();
         }
     }
 }

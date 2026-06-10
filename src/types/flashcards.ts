@@ -10,6 +10,8 @@ export type Deck = {
 export type Flashcard = {
   id: string;
   deckId: string;
+  externalId?: string;
+  externalUpdatedAt?: string;
   question: string;
   answer: string;
   createdAt: string;
@@ -46,8 +48,25 @@ export type AddCardInput = {
   deckId: string;
   question: string;
   answer: string;
+  externalId?: string;
+  externalUpdatedAt?: string;
   sourceNotePath?: string;
   sourcePage?: number;
+};
+
+export type ImportCardInput = {
+  deckName?: string;
+  question: string;
+  answer: string;
+  externalId?: string;
+  externalUpdatedAt?: string;
+};
+
+export type ImportSummary = {
+  createdDecks: number;
+  addedCards: number;
+  updatedCards: number;
+  skippedCards: number;
 };
 
 export type UpdateCardInput = {

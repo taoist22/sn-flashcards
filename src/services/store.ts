@@ -1,7 +1,10 @@
 import type {
   AddCardInput,
+  Deck,
   Flashcard,
   FlashcardDatabase,
+  ImportCardInput,
+  ImportSummary,
   ReviewEntry,
   UpdateCardInput,
 } from '../types/flashcards';
@@ -15,6 +18,41 @@ const newId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+
+const normalizeName = (value: string) => value.trim().toLocaleLowerCase();
+
+export const fingerprintCard = (
+  deckName: string,
+  question: string,
+  answer: string,
+) => {
+  const source = `${normalizeName(deckName)}\n${question.trim()}\n${answer.trim()}`;
+  let hash = 5381;
+  for (let index = 0; index < source.length; index += 1) {
+    hash = (hash * 33) ^ source.charCodeAt(index);
+  }
+  return `fingerprint:${(hash >>> 0).toString(36)}`;
+};
+
+const findOrCreateDeck = (
+  decks: Deck[],
+  deckName: string,
+): {decks: Deck[]; deckId: string; created: boolean} => {
+  const normalized = normalizeName(deckName);
+  const existing = decks.find(deck => normalizeName(deck.name) === normalized);
+  if (existing) {
+    return {decks, deckId: existing.id, created: false};
+  }
+
+  const now = nowIso();
+  const deck = {
+    id: newId('deck'),
+    name: deckName.trim() || 'Imported',
+    createdAt: now,
+    updatedAt: now,
+  };
+  return {decks: [...decks, deck], deckId: deck.id, created: true};
+};
 
 const createDefaultDb = (): FlashcardDatabase => {
   const now = nowIso();
@@ -117,6 +155,8 @@ export const addCard = async (
   const card: Flashcard = {
     id: newId('card'),
     deckId: input.deckId,
+    externalId: input.externalId,
+    externalUpdatedAt: input.externalUpdatedAt,
     question: input.question.trim(),
     answer: input.answer.trim(),
     sourceNotePath: input.sourceNotePath,
@@ -129,6 +169,91 @@ export const addCard = async (
   const next = {...db, cards: [...db.cards, card]};
   await saveDatabase(next);
   return next;
+};
+
+export const importCards = async (
+  db: FlashcardDatabase,
+  rows: ImportCardInput[],
+  fallbackDeckName: string,
+): Promise<{db: FlashcardDatabase; summary: ImportSummary}> => {
+  let decks = [...db.decks];
+  let cards = [...db.cards];
+  let createdDecks = 0;
+  let addedCards = 0;
+  let updatedCards = 0;
+  let skippedCards = 0;
+
+  for (const row of rows) {
+    const question = row.question.trim();
+    const answer = row.answer.trim();
+    const deckName = (row.deckName || fallbackDeckName || 'Imported').trim();
+
+    if (!question || !answer) {
+      skippedCards += 1;
+      continue;
+    }
+
+    const deckResult = findOrCreateDeck(decks, deckName);
+    decks = deckResult.decks;
+    if (deckResult.created) {
+      createdDecks += 1;
+    }
+
+    const externalId =
+      row.externalId?.trim() || fingerprintCard(deckName, question, answer);
+    const existingIndex = cards.findIndex(
+      card =>
+        card.deckId === deckResult.deckId &&
+        (card.externalId === externalId ||
+          (!card.externalId &&
+            fingerprintCard(deckName, card.question, card.answer) === externalId)),
+    );
+
+    if (existingIndex >= 0) {
+      const existing = cards[existingIndex];
+      const changed =
+        existing.question !== question ||
+        existing.answer !== answer ||
+        existing.externalUpdatedAt !== row.externalUpdatedAt;
+
+      if (!changed) {
+        skippedCards += 1;
+        continue;
+      }
+
+      cards[existingIndex] = {
+        ...existing,
+        externalId,
+        externalUpdatedAt: row.externalUpdatedAt,
+        question,
+        answer,
+        updatedAt: nowIso(),
+      };
+      updatedCards += 1;
+      continue;
+    }
+
+    const now = nowIso();
+    cards.push({
+      id: newId('card'),
+      deckId: deckResult.deckId,
+      externalId,
+      externalUpdatedAt: row.externalUpdatedAt,
+      question,
+      answer,
+      createdAt: now,
+      updatedAt: now,
+      fsrs: createInitialFsrsCard(new Date()),
+    });
+    addedCards += 1;
+  }
+
+  const next = {...db, decks, cards};
+  await saveDatabase(next);
+  return {
+    db: next,
+    summary: {createdDecks, addedCards, updatedCards, skippedCards},
+  };
 };
 
 export const updateCard = async (

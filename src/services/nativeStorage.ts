@@ -3,6 +3,8 @@ import {NativeModules} from 'react-native';
 type FlashcardStorageModule = {
   readDatabase(): Promise<string | null>;
   writeDatabase(json: string): Promise<boolean>;
+  readTextFile(path: string): Promise<string | null>;
+  writeTextFile(path: string, text: string): Promise<boolean>;
 };
 
 const storage = NativeModules.FlashcardStorage as
@@ -28,4 +30,21 @@ export const writeDatabaseJson = async (json: string) => {
   }
 
   return storage.writeDatabase(json);
+};
+
+export const readTextFile = async (path: string) => {
+  if (!storage) {
+    return null;
+  }
+
+  return storage.readTextFile(path);
+};
+
+export const writeTextFile = async (path: string, text: string) => {
+  if (!storage) {
+    memoryFallback.value = text;
+    return true;
+  }
+
+  return storage.writeTextFile(path, text);
 };
