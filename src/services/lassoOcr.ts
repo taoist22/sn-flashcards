@@ -79,6 +79,36 @@ const recognize = async (elements: LassoElement[], size: {width: number; height:
   return unwrap<string>(response, '').trim();
 };
 
+const splitRecognizedText = (text: string) => {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return null;
+  }
+
+  return {
+    question: lines.slice(0, -1).join('\n'),
+    answer: lines.at(-1) ?? '',
+  };
+};
+
+const clearLassoSelection = async () => {
+  try {
+    await PluginCommAPI.setLassoBoxState(2);
+  } catch {
+    // The note app may already have dismissed the lasso box.
+  }
+
+  try {
+    PluginCommAPI.clearElementCache();
+  } catch {
+    // Cache cleanup is best-effort and should not block card creation.
+  }
+};
+
 export const createDraftFromLasso = async (): Promise<OcrFlashcardDraft> => {
   const notePath = unwrap<string | undefined>(
     await PluginCommAPI.getCurrentFilePath(),
@@ -101,29 +131,31 @@ export const createDraftFromLasso = async (): Promise<OcrFlashcardDraft> => {
     [],
   ).filter(element => element.type === 0 || element.stroke);
 
-  const {questionElements, answerElements} = splitIntoQuestionAndAnswer(elements);
-  const [question, answer] = await Promise.all([
-    recognize(questionElements, size),
-    recognize(answerElements, size),
-  ]);
+  try {
+    const fullText = await recognize(elements, size);
+    const splitText = splitRecognizedText(fullText);
 
-  if (!answer && question.includes('\n')) {
-    const lines = question
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean);
+    if (splitText) {
+      return {
+        ...splitText,
+        sourceNotePath: notePath,
+        sourcePage: page,
+      };
+    }
+
+    const {questionElements, answerElements} = splitIntoQuestionAndAnswer(elements);
+    const [question, answer] = await Promise.all([
+      recognize(questionElements, size),
+      recognize(answerElements, size),
+    ]);
+
     return {
-      question: lines.slice(0, -1).join('\n'),
-      answer: lines.at(-1) ?? '',
+      question,
+      answer,
       sourceNotePath: notePath,
       sourcePage: page,
     };
+  } finally {
+    await clearLassoSelection();
   }
-
-  return {
-    question,
-    answer,
-    sourceNotePath: notePath,
-    sourcePage: page,
-  };
 };
