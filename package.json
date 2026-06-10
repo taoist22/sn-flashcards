@@ -1,6 +1,6 @@
 {
-  "name": "SupernoteFlashcards",
-  "version": "0.0.1",
+  "name": "Flashcards",
+  "version": "0.1.0-beta",
   "description": "Decks, handwritten flashcard capture, and FSRS study scheduling for Supernote.",
   "private": true,
   "scripts": {
