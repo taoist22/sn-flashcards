@@ -36,6 +36,7 @@ import {
   getImportDropFolder,
   listImportDropFolderFiles,
   parseCardText,
+  pickImportTextFile,
   readImportTextFile,
 } from './src/services/ankiText';
 
@@ -447,35 +448,60 @@ function App(): React.JSX.Element {
       setScreen('import');
     } catch (error) {
       const dropFolder = await getImportDropFolder();
-      setImportFiles([]);
       setImportFolder(dropFolder);
+      Alert.alert(
+        'Import scan failed',
+        error instanceof Error
+          ? error.message
+          : 'Flashcards could not scan the import folder.',
+      );
+      setImportFiles([]);
       setScreen('import');
     }
   };
 
+  const importPickedText = async (picked: {path: string; text: string}) => {
+    const fallbackDeckName = selectedDeck?.name ?? 'Imported';
+
+    const rows = parseCardText(picked.text, fallbackDeckName);
+    if (rows.length === 0) {
+      Alert.alert('No cards found', 'The file did not contain question/answer rows.');
+      return;
+    }
+
+    const result = await importCards(requireDb(), rows, fallbackDeckName);
+    setDb(result.db);
+    Alert.alert(
+      'Import complete',
+      [
+        `${result.summary.addedCards} added`,
+        `${result.summary.updatedCards} updated`,
+        `${result.summary.skippedCards} skipped`,
+        `${result.summary.createdDecks} decks created`,
+      ].join('\n'),
+    );
+    setScreen('cards');
+  };
+
   const importTextDeck = async (path: string) => {
     try {
-      const fallbackDeckName = selectedDeck?.name ?? 'Imported';
       const picked = await readImportTextFile(path);
+      await importPickedText(picked);
+    } catch (error) {
+      Alert.alert(
+        'Import failed',
+        error instanceof Error ? error.message : 'Could not import that file.',
+      );
+    }
+  };
 
-      const rows = parseCardText(picked.text, fallbackDeckName);
-      if (rows.length === 0) {
-        Alert.alert('No cards found', 'The file did not contain question/answer rows.');
+  const browseImportTextDeck = async () => {
+    try {
+      const picked = await pickImportTextFile();
+      if (!picked) {
         return;
       }
-
-      const result = await importCards(requireDb(), rows, fallbackDeckName);
-      setDb(result.db);
-      Alert.alert(
-        'Import complete',
-        [
-          `${result.summary.addedCards} added`,
-          `${result.summary.updatedCards} updated`,
-          `${result.summary.skippedCards} skipped`,
-          `${result.summary.createdDecks} decks created`,
-        ].join('\n'),
-      );
-      setScreen('cards');
+      await importPickedText(picked);
     } catch (error) {
       Alert.alert(
         'Import failed',
@@ -635,6 +661,7 @@ function App(): React.JSX.Element {
             files={importFiles}
             folder={importFolder}
             onRefresh={openImportDropFolder}
+            onBrowse={browseImportTextDeck}
             onImport={importTextDeck}
           />
         )}
@@ -647,11 +674,13 @@ function ImportScreen({
   files,
   folder,
   onRefresh,
+  onBrowse,
   onImport,
 }: {
   files: string[];
   folder: string;
   onRefresh: () => void;
+  onBrowse: () => void;
   onImport: (path: string) => void;
 }) {
   return (
@@ -663,6 +692,7 @@ function ImportScreen({
       <Text style={styles.pathText}>{folder}</Text>
       <View style={styles.actions}>
         <SecondaryButton label="Refresh" onPress={onRefresh} />
+        <SecondaryButton label="Browse Files" onPress={onBrowse} />
       </View>
       {files.length === 0 ? (
         <Text style={styles.emptyText}>No .txt, .tsv, or .csv files found there yet.</Text>
@@ -997,7 +1027,7 @@ function CaptureScreen({
   onSave: () => void;
 }) {
   return (
-    <View>
+    <View style={styles.captureScreen}>
       <Text style={styles.sectionTitle}>Add Flashcard</Text>
       {loading ? (
         <View style={styles.loadingRow}>
@@ -1297,6 +1327,9 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 40,
+  },
+  captureScreen: {
+    paddingBottom: 360,
   },
   sectionTitle: {
     fontSize: 22,
