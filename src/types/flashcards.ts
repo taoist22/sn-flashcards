@@ -32,11 +32,18 @@ export type ReviewEntry = {
   scheduledDays: number;
 };
 
+export type NoteDeckDefault = {
+  notePath: string;
+  deckId: string;
+  updatedAt: string;
+};
+
 export type FlashcardDatabase = {
   version: 1;
   decks: Deck[];
   cards: Flashcard[];
   reviews: ReviewEntry[];
+  noteDefaults: NoteDeckDefault[];
 };
 
 export type SerializedFSRSCard = Omit<FSRSCard, 'due' | 'last_review'> & {

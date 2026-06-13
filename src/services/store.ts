@@ -5,6 +5,7 @@ import type {
   FlashcardDatabase,
   ImportCardInput,
   ImportSummary,
+  NoteDeckDefault,
   ReviewEntry,
   UpdateCardInput,
 } from '../types/flashcards';
@@ -20,6 +21,31 @@ const newId = (prefix: string) =>
     .slice(2, 8)}`;
 
 const normalizeName = (value: string) => value.trim().toLocaleLowerCase();
+
+const normalizeNoteDefaults = (
+  noteDefaults: unknown,
+  decks: Deck[],
+): NoteDeckDefault[] => {
+  if (!Array.isArray(noteDefaults)) {
+    return [];
+  }
+
+  const deckIds = new Set(decks.map(deck => deck.id));
+  return noteDefaults.filter(
+    (item): item is NoteDeckDefault => {
+      if (typeof item !== 'object' || item === null) {
+        return false;
+      }
+      const candidate = item as Partial<NoteDeckDefault>;
+      return (
+        typeof candidate.notePath === 'string' &&
+        typeof candidate.deckId === 'string' &&
+        typeof candidate.updatedAt === 'string' &&
+        deckIds.has(candidate.deckId)
+      );
+    },
+  );
+};
 
 export const fingerprintCard = (
   deckName: string,
@@ -68,6 +94,7 @@ const createDefaultDb = (): FlashcardDatabase => {
     ],
     cards: [],
     reviews: [],
+    noteDefaults: [],
   };
 };
 
@@ -81,6 +108,7 @@ const normalizeDb = (db: Partial<FlashcardDatabase>): FlashcardDatabase => {
     decks: db.decks,
     cards: Array.isArray(db.cards) ? db.cards : [],
     reviews: Array.isArray(db.reviews) ? db.reviews : [],
+    noteDefaults: normalizeNoteDefaults(db.noteDefaults, db.decks),
   };
 };
 
@@ -142,6 +170,46 @@ export const deleteDeck = async (
     cards: db.cards.map(card =>
       card.deckId === deckId ? {...card, deckId: fallbackDeckId} : card,
     ),
+    noteDefaults: db.noteDefaults.filter(item => item.deckId !== deckId),
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+export const setNoteDefaultDeck = async (
+  db: FlashcardDatabase,
+  notePath: string,
+  deckId: string,
+): Promise<FlashcardDatabase> => {
+  const trimmedPath = notePath.trim();
+  if (!trimmedPath || !db.decks.some(deck => deck.id === deckId)) {
+    return db;
+  }
+
+  const now = nowIso();
+  const next = {
+    ...db,
+    noteDefaults: [
+      ...db.noteDefaults.filter(item => item.notePath !== trimmedPath),
+      {notePath: trimmedPath, deckId, updatedAt: now},
+    ],
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+export const clearNoteDefaultDeck = async (
+  db: FlashcardDatabase,
+  notePath: string,
+): Promise<FlashcardDatabase> => {
+  const trimmedPath = notePath.trim();
+  if (!trimmedPath) {
+    return db;
+  }
+
+  const next = {
+    ...db,
+    noteDefaults: db.noteDefaults.filter(item => item.notePath !== trimmedPath),
   };
   await saveDatabase(next);
   return next;

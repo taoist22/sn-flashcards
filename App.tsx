@@ -11,11 +11,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import {PluginManager} from 'sn-plugin-lib';
+import {PluginCommAPI, PluginFileAPI, PluginManager} from 'sn-plugin-lib';
 import {Rating, type Grade} from 'ts-fsrs';
 import {
   addCard,
   cardsForDeck,
+  clearNoteDefaultDeck,
   createDeck,
   deckStats,
   deleteCard,
@@ -24,6 +25,7 @@ import {
   importCards,
   loadDatabase,
   reviewCard,
+  setNoteDefaultDeck,
   updateCard,
 } from './src/services/store';
 import {createDraftFromLasso, type OcrFlashcardDraft} from './src/services/lassoOcr';
@@ -42,9 +44,138 @@ const LASSO_BUTTON_ID = 200;
 
 type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture' | 'import';
 
+type NoteContext = {
+  path: string;
+  page: number;
+};
+
+type NoteDeckSource = 'saved' | 'keyword' | 'folder';
+
+type NoteDeckMatch = {
+  deckId: string;
+  source: NoteDeckSource;
+};
+
+type ApiResponse<T> = {
+  success?: boolean;
+  result?: T;
+  error?: {message?: string};
+} | null | undefined;
+
 const emptyDraft: OcrFlashcardDraft = {
   question: '',
   answer: '',
+};
+
+const normalizeDeckSignal = (value: string) =>
+  value.trim().replace(/^#+/, '').trim().toLocaleLowerCase();
+
+const getFolderSignals = (notePath: string) =>
+  notePath
+    .split('/')
+    .slice(0, -1)
+    .filter(Boolean)
+    .reverse()
+    .map(normalizeDeckSignal);
+
+const unwrap = <T,>(response: unknown, fallback: T): T => {
+  const typed = response as ApiResponse<T>;
+  if (!typed?.success) {
+    return fallback;
+  }
+  return typed.result ?? fallback;
+};
+
+const getCurrentNoteContext = async (): Promise<NoteContext | null> => {
+  const path = unwrap<string | undefined>(
+    await PluginCommAPI.getCurrentFilePath(),
+    undefined,
+  );
+  const page = unwrap<number | undefined>(
+    await PluginCommAPI.getCurrentPageNum(),
+    undefined,
+  );
+
+  if (!path || typeof page !== 'number' || !path.toLowerCase().endsWith('.note')) {
+    return null;
+  }
+
+  return {path, page};
+};
+
+const getKeywordDeckId = async (
+  db: FlashcardDatabase,
+  notePath: string,
+): Promise<string | null> => {
+  const keywords = await getNativeKeywords(notePath);
+  const deckBySignal = new Map(
+    db.decks.map(deck => [normalizeDeckSignal(deck.name), deck.id]),
+  );
+
+  for (const item of keywords) {
+    const match = deckBySignal.get(normalizeDeckSignal(item.keyword ?? ''));
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+};
+
+const getDefaultDeckIdForNote = async (
+  db: FlashcardDatabase,
+  notePath: string,
+): Promise<NoteDeckMatch | null> => {
+  const mapped = db.noteDefaults.find(item => item.notePath === notePath);
+  if (mapped && db.decks.some(deck => deck.id === mapped.deckId)) {
+    return {deckId: mapped.deckId, source: 'saved'};
+  }
+
+  const keywordDeckId = await getKeywordDeckId(db, notePath);
+  if (keywordDeckId) {
+    return {deckId: keywordDeckId, source: 'keyword'};
+  }
+
+  const deckBySignal = new Map(
+    db.decks.map(deck => [normalizeDeckSignal(deck.name), deck.id]),
+  );
+  for (const folderSignal of getFolderSignals(notePath)) {
+    const folderDeckId = deckBySignal.get(folderSignal);
+    if (folderDeckId) {
+      return {deckId: folderDeckId, source: 'folder'};
+    }
+  }
+
+  return null;
+};
+
+const getNativeKeywords = async (notePath: string) =>
+  unwrap<Array<{keyword?: string}>>(
+    await (PluginFileAPI as any).getKeyWords(notePath),
+    [],
+  );
+
+const addNativeKeyword = async (note: NoteContext, keyword: string) => {
+  const normalized = keyword.trim();
+  if (!normalized) {
+    return;
+  }
+  const existing = await getNativeKeywords(note.path);
+  const alreadyExists = existing.some(
+    item => normalizeDeckSignal(item.keyword ?? '') === normalizeDeckSignal(normalized),
+  );
+  if (alreadyExists) {
+    return;
+  }
+
+  const response = await PluginFileAPI.insertKeyWord(
+    note.path,
+    note.page,
+    normalized,
+  ) as ApiResponse<boolean>;
+  if (!unwrap<boolean>(response, false)) {
+    throw new Error(response?.error?.message ?? 'Could not add note keyword.');
+  }
 };
 
 function App(): React.JSX.Element {
@@ -57,6 +188,13 @@ function App(): React.JSX.Element {
   const [showAnswer, setShowAnswer] = useState(false);
   const [studyGuess, setStudyGuess] = useState('');
   const [newDeckName, setNewDeckName] = useState('');
+  const [captureDeckName, setCaptureDeckName] = useState('');
+  const [linkDefaultOnApply, setLinkDefaultOnApply] = useState(true);
+  const [addKeywordOnApply, setAddKeywordOnApply] = useState(true);
+  const [captureLinkDefault, setCaptureLinkDefault] = useState(true);
+  const [captureAddKeyword, setCaptureAddKeyword] = useState(true);
+  const [noteContext, setNoteContext] = useState<NoteContext | null>(null);
+  const [noteDeckMatch, setNoteDeckMatch] = useState<NoteDeckMatch | null>(null);
   const [importFiles, setImportFiles] = useState<string[]>([]);
   const [importFolder, setImportFolder] = useState('');
 
@@ -79,8 +217,16 @@ function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     const loaded = await loadDatabase();
+    const note = await getCurrentNoteContext();
+    setNoteContext(note);
     setDb(loaded);
-    setSelectedDeckId(current => current ?? loaded.decks[0]?.id ?? null);
+    const noteMatch = note
+      ? await getDefaultDeckIdForNote(loaded, note.path)
+      : null;
+    setNoteDeckMatch(noteMatch);
+    setSelectedDeckId(
+      current => noteMatch?.deckId ?? current ?? loaded.decks[0]?.id ?? null,
+    );
   }, []);
 
   const loadLassoDraft = useCallback(async () => {
@@ -88,6 +234,7 @@ function App(): React.JSX.Element {
     setScreen('capture');
     setDraft(emptyDraft);
     try {
+      await refresh();
       const nextDraft = await createDraftFromLasso();
       setDraft(nextDraft);
     } catch (error) {
@@ -99,7 +246,7 @@ function App(): React.JSX.Element {
     } finally {
       setCaptureLoading(false);
     }
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
@@ -113,13 +260,14 @@ function App(): React.JSX.Element {
           return;
         }
         if (event.id === MAIN_BUTTON_ID) {
+          refresh().catch(() => undefined);
           setScreen('decks');
         }
       },
     });
 
     return () => subscription.remove();
-  }, [loadLassoDraft]);
+  }, [loadLassoDraft, refresh]);
 
   const close = () => {
     PluginManager.closePluginView();
@@ -132,10 +280,105 @@ function App(): React.JSX.Element {
     return db;
   };
 
-  const saveDeck = async () => {
-    const next = await createDeck(requireDb(), newDeckName);
+  const createDeckByName = async (name: string) => {
+    const currentDb = requireDb();
+    const trimmedName = name.trim();
+    const beforeDeckIds = new Set(currentDb.decks.map(deck => deck.id));
+    const next = await createDeck(currentDb, trimmedName);
+    const createdDeck = next.decks.find(deck => !beforeDeckIds.has(deck.id));
+
     setDb(next);
+    if (createdDeck) {
+      setSelectedDeckId(createdDeck.id);
+    }
+    return {next, createdDeck};
+  };
+
+  const saveDeck = async () => {
+    await createDeckByName(newDeckName);
     setNewDeckName('');
+  };
+
+  const applyNoteLinkOptions = async (
+    deck: Deck,
+    options: {linkDefault: boolean; addKeyword: boolean},
+    baseDb?: FlashcardDatabase,
+  ) => {
+    if (!noteContext) {
+      return;
+    }
+    if (!options.linkDefault && !options.addKeyword) {
+      Alert.alert('Nothing selected', 'Choose Link Default, Add Keyword, or both.');
+      return;
+    }
+
+    let keywordError: unknown = null;
+    try {
+      let next = baseDb ?? requireDb();
+      if (options.addKeyword) {
+        try {
+          await addNativeKeyword(noteContext, deck.name);
+        } catch (error) {
+          keywordError = error;
+        }
+      }
+      if (options.linkDefault) {
+        next = await setNoteDefaultDeck(next, noteContext.path, deck.id);
+      }
+      const noteMatch = await getDefaultDeckIdForNote(next, noteContext.path);
+      setDb(next);
+      setSelectedDeckId(deck.id);
+      setNoteDeckMatch(noteMatch);
+      if (keywordError) {
+        const keywordFailureMessage = options.linkDefault
+          ? 'The note default was updated, but the keyword was not added.'
+          : 'The keyword was not added.';
+        Alert.alert(
+          options.linkDefault ? 'Note linked' : 'Keyword not added',
+          keywordError instanceof Error
+            ? `${keywordFailureMessage}\n\n${keywordError.message}`
+            : keywordFailureMessage,
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        'Could not link note',
+        error instanceof Error ? error.message : 'Try again from inside the note.',
+      );
+    }
+  };
+
+  const createDeckFromCapture = async () => {
+    const result = await createDeckByName(captureDeckName);
+    setCaptureDeckName('');
+    if (result.createdDeck && noteContext) {
+      await applyNoteLinkOptions(
+        result.createdDeck,
+        {
+          linkDefault: captureLinkDefault,
+          addKeyword: captureAddKeyword,
+        },
+        result.next,
+      );
+    }
+  };
+
+  const unlinkCurrentNote = async () => {
+    if (!noteContext) {
+      return;
+    }
+
+    try {
+      const next = await clearNoteDefaultDeck(requireDb(), noteContext.path);
+      const noteMatch = await getDefaultDeckIdForNote(next, noteContext.path);
+      setDb(next);
+      setNoteDeckMatch(noteMatch);
+    } catch (error) {
+      Alert.alert(
+        'Could not unlink note',
+        error instanceof Error ? error.message : 'Try again from inside the note.',
+      );
+    }
   };
 
   const removeDeck = async (deck: Deck) => {
@@ -282,13 +525,35 @@ function App(): React.JSX.Element {
       )}
 
       <ScrollView contentContainerStyle={styles.content}>
+        {noteContext && screen !== 'decks' && (
+          <NoteLinkStatus
+            deck={selectedDeck}
+            decks={db.decks}
+            match={noteDeckMatch}
+            onUnlink={unlinkCurrentNote}
+          />
+        )}
+
         {screen === 'decks' && (
           <DeckScreen
             db={db}
             selectedDeckId={selectedDeck.id}
             newDeckName={newDeckName}
+            noteMatch={noteDeckMatch}
+            canLinkNote={noteContext != null}
+            linkDefaultOnApply={linkDefaultOnApply}
+            addKeywordOnApply={addKeywordOnApply}
             onNewDeckName={setNewDeckName}
             onCreateDeck={saveDeck}
+            onToggleLinkDefault={() => setLinkDefaultOnApply(current => !current)}
+            onToggleAddKeyword={() => setAddKeywordOnApply(current => !current)}
+            onApplyNoteLink={() =>
+              applyNoteLinkOptions(selectedDeck, {
+                linkDefault: linkDefaultOnApply,
+                addKeyword: addKeywordOnApply,
+              })
+            }
+            onUnlinkNote={unlinkCurrentNote}
             onSelectDeck={deck => {
               setSelectedDeckId(deck.id);
               setScreen('cards');
@@ -327,9 +592,17 @@ function App(): React.JSX.Element {
             draft={draft}
             decks={db.decks}
             selectedDeckId={selectedDeck.id}
+            newDeckName={captureDeckName}
+            canLinkNote={noteContext != null}
+            linkDefaultOnCreate={captureLinkDefault}
+            addKeywordOnCreate={captureAddKeyword}
             loading={captureLoading}
             onChangeDraft={setDraft}
             onSelectDeck={setSelectedDeckId}
+            onNewDeckName={setCaptureDeckName}
+            onCreateDeck={createDeckFromCapture}
+            onToggleLinkDefault={() => setCaptureLinkDefault(current => !current)}
+            onToggleAddKeyword={() => setCaptureAddKeyword(current => !current)}
             onSave={saveDraftCard}
           />
         )}
@@ -411,26 +684,187 @@ function ImportScreen({
   );
 }
 
+function NoteLinkStatus({
+  deck,
+  decks,
+  match,
+  onUnlink,
+}: {
+  deck: Deck;
+  decks: Deck[];
+  match: NoteDeckMatch | null;
+  onUnlink: () => void;
+}) {
+  const currentDeckIsMatched = match?.deckId === deck.id;
+  const linkedDeck = decks.find(item => item.id === match?.deckId);
+
+  if (currentDeckIsMatched && match.source === 'saved') {
+    return (
+      <View style={styles.noteStatus}>
+        <Text style={styles.noteStatusTitle}>Linked to {deck.name}</Text>
+        <Text style={styles.noteStatusText}>
+          A note-specific default is saved for this note.
+        </Text>
+        <View style={styles.noteStatusActions}>
+          <SecondaryButton label="Unlink Note" onPress={onUnlink} />
+        </View>
+      </View>
+    );
+  }
+
+  if (match?.source === 'saved') {
+    return (
+      <View style={styles.noteStatus}>
+        <Text style={styles.noteStatusTitle}>
+          Linked to {linkedDeck?.name ?? 'another deck'}
+        </Text>
+        <Text style={styles.noteStatusText}>
+          Open Decks to change which deck this note opens.
+        </Text>
+        <View style={styles.noteStatusActions}>
+          <SecondaryButton label="Unlink Note" onPress={onUnlink} />
+        </View>
+      </View>
+    );
+  }
+
+  if (currentDeckIsMatched && match.source === 'keyword') {
+    return (
+      <View style={styles.noteStatus}>
+        <Text style={styles.noteStatusTitle}>{deck.name} keyword found</Text>
+        <Text style={styles.noteStatusText}>
+          This note has a matching Supernote keyword.
+        </Text>
+      </View>
+    );
+  }
+
+  if (currentDeckIsMatched && match.source === 'folder') {
+    return (
+      <View style={styles.noteStatus}>
+        <Text style={styles.noteStatusTitle}>Using {deck.name} from folder</Text>
+        <Text style={styles.noteStatusText}>
+          Open Decks to save this as an explicit note link.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.noteStatus}>
+      <Text style={styles.noteStatusTitle}>No note link saved</Text>
+      <Text style={styles.noteStatusText}>
+        Open Decks to link this note to a deck.
+      </Text>
+    </View>
+  );
+}
+
+function CheckRow({
+  label,
+  checked,
+  onPress,
+}: {
+  label: string;
+  checked: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={styles.checkboxRow}>
+      <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+        {checked && <Text style={styles.checkboxMark}>✓</Text>}
+      </View>
+      <Text style={styles.checkboxText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function DeckScreen({
   db,
   selectedDeckId,
   newDeckName,
+  noteMatch,
+  canLinkNote,
+  linkDefaultOnApply,
+  addKeywordOnApply,
   onNewDeckName,
   onCreateDeck,
+  onToggleLinkDefault,
+  onToggleAddKeyword,
+  onApplyNoteLink,
+  onUnlinkNote,
   onSelectDeck,
   onDeleteDeck,
 }: {
   db: FlashcardDatabase;
   selectedDeckId: string;
   newDeckName: string;
+  noteMatch: NoteDeckMatch | null;
+  canLinkNote: boolean;
+  linkDefaultOnApply: boolean;
+  addKeywordOnApply: boolean;
   onNewDeckName: (name: string) => void;
   onCreateDeck: () => void;
+  onToggleLinkDefault: () => void;
+  onToggleAddKeyword: () => void;
+  onApplyNoteLink: () => void;
+  onUnlinkNote: () => void;
   onSelectDeck: (deck: Deck) => void;
   onDeleteDeck: (deck: Deck) => void;
 }) {
+  const selectedDeck = db.decks.find(deck => deck.id === selectedDeckId) ?? db.decks[0];
+  const linkedDeck = db.decks.find(deck => deck.id === noteMatch?.deckId);
+  const savedLink = noteMatch?.source === 'saved';
+
   return (
     <View>
       <Text style={styles.sectionTitle}>Decks</Text>
+      <View style={styles.formBlock}>
+        <Text style={styles.blockTitle}>Create Deck</Text>
+        <View style={styles.createDeckRow}>
+          <TextInput
+            value={newDeckName}
+            onChangeText={onNewDeckName}
+            placeholder="New deck name"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.createDeckInput]}
+          />
+          <Pressable onPress={onCreateDeck} style={styles.createDeckButton}>
+            <Text style={styles.createDeckButtonText}>Create</Text>
+          </Pressable>
+        </View>
+
+        {canLinkNote && selectedDeck && (
+          <View style={styles.noteLinkBlock}>
+            <Text style={styles.blockTitle}>Note Link</Text>
+            <Text style={styles.noteStatusText}>
+              {savedLink
+                ? `This note is linked to ${linkedDeck?.name ?? 'a deck'}.`
+                : `Link this note to ${selectedDeck.name}.`}
+            </Text>
+            <CheckRow
+              label="Link note default"
+              checked={linkDefaultOnApply}
+              onPress={onToggleLinkDefault}
+            />
+            <CheckRow
+              label="Add Supernote keyword"
+              checked={addKeywordOnApply}
+              onPress={onToggleAddKeyword}
+            />
+            <View style={styles.actions}>
+              <PrimaryButton
+                label={`Apply to ${selectedDeck.name}`}
+                onPress={onApplyNoteLink}
+              />
+              {savedLink && (
+                <SecondaryButton label="Unlink Note" onPress={onUnlinkNote} />
+              )}
+            </View>
+          </View>
+        )}
+      </View>
+
       {db.decks.map(deck => {
         const stats = deckStats(db, deck.id);
         const selected = deck.id === selectedDeckId;
@@ -453,17 +887,6 @@ function DeckScreen({
           </Pressable>
         );
       })}
-
-      <View style={styles.formBlock}>
-        <TextInput
-          value={newDeckName}
-          onChangeText={onNewDeckName}
-          placeholder="New deck name"
-          placeholderTextColor="#74746c"
-          style={styles.input}
-        />
-        <PrimaryButton label="Create Deck" onPress={onCreateDeck} />
-      </View>
     </View>
   );
 }
@@ -544,17 +967,33 @@ function CaptureScreen({
   draft,
   decks,
   selectedDeckId,
+  newDeckName,
+  canLinkNote,
+  linkDefaultOnCreate,
+  addKeywordOnCreate,
   loading,
   onChangeDraft,
   onSelectDeck,
+  onNewDeckName,
+  onCreateDeck,
+  onToggleLinkDefault,
+  onToggleAddKeyword,
   onSave,
 }: {
   draft: OcrFlashcardDraft;
   decks: Deck[];
   selectedDeckId: string;
+  newDeckName: string;
+  canLinkNote: boolean;
+  linkDefaultOnCreate: boolean;
+  addKeywordOnCreate: boolean;
   loading: boolean;
   onChangeDraft: (draft: OcrFlashcardDraft) => void;
   onSelectDeck: (deckId: string) => void;
+  onNewDeckName: (name: string) => void;
+  onCreateDeck: () => void;
+  onToggleLinkDefault: () => void;
+  onToggleAddKeyword: () => void;
   onSave: () => void;
 }) {
   return (
@@ -566,6 +1005,36 @@ function CaptureScreen({
           <Text style={styles.muted}>Reading handwriting...</Text>
         </View>
       ) : null}
+
+      <View style={styles.inlineCreateBlock}>
+        <Text style={styles.blockTitle}>Create Deck</Text>
+        <View style={styles.createDeckRow}>
+          <TextInput
+            value={newDeckName}
+            onChangeText={onNewDeckName}
+            placeholder="New deck name"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.createDeckInput]}
+          />
+          <Pressable onPress={onCreateDeck} style={styles.createDeckButton}>
+            <Text style={styles.createDeckButtonText}>Create</Text>
+          </Pressable>
+        </View>
+        {canLinkNote && (
+          <>
+            <CheckRow
+              label="Link note default"
+              checked={linkDefaultOnCreate}
+              onPress={onToggleLinkDefault}
+            />
+            <CheckRow
+              label="Add Supernote keyword"
+              checked={addKeywordOnCreate}
+              onPress={onToggleAddKeyword}
+            />
+          </>
+        )}
+      </View>
 
       <Text style={styles.label}>Question</Text>
       <TextInput
@@ -589,6 +1058,7 @@ function CaptureScreen({
 
       <Text style={styles.label}>Deck</Text>
       <DeckChooser decks={decks} selectedDeckId={selectedDeckId} onSelect={onSelectDeck} />
+
       <PrimaryButton label="Add Flashcard" onPress={onSave} />
     </View>
   );
@@ -605,6 +1075,7 @@ function EditScreen({
   onChange: (card: Flashcard) => void;
   onSave: () => void;
 }) {
+  const currentDeck = decks.find(deck => deck.id === card.deckId);
   return (
     <View>
       <Text style={styles.sectionTitle}>Edit Card</Text>
@@ -622,13 +1093,16 @@ function EditScreen({
         multiline
         style={[styles.input, styles.textArea]}
       />
-      <Text style={styles.label}>Deck</Text>
+      <Text style={styles.label}>Move to Deck</Text>
+      <Text style={styles.muted}>
+        Currently in {currentDeck?.name ?? 'selected deck'}
+      </Text>
       <DeckChooser
         decks={decks}
         selectedDeckId={card.deckId}
         onSelect={deckId => onChange({...card, deckId})}
       />
-      <PrimaryButton label="Save Changes" onPress={onSave} />
+      <PrimaryButton label="Save Card" onPress={onSave} />
     </View>
   );
 }
@@ -848,6 +1322,29 @@ const styles = StyleSheet.create({
   rowMain: {
     flex: 1,
   },
+  noteStatus: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#c9d5ce',
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 14,
+    gap: 8,
+  },
+  noteStatusTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1f2623',
+  },
+  noteStatusText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#4d534d',
+  },
+  noteStatusActions: {
+    gap: 8,
+    marginTop: 2,
+  },
   cardTitle: {
     fontSize: 17,
     fontWeight: '700',
@@ -869,6 +1366,83 @@ const styles = StyleSheet.create({
   formBlock: {
     gap: 10,
     marginTop: 18,
+  },
+  noteLinkBlock: {
+    borderWidth: 1,
+    borderColor: '#d7d7ce',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    padding: 14,
+    gap: 10,
+    marginBottom: 8,
+  },
+  inlineCreateBlock: {
+    borderWidth: 1,
+    borderColor: '#d7d7ce',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    padding: 14,
+    gap: 10,
+    marginTop: 12,
+    marginBottom: 14,
+  },
+  blockTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#1f2623',
+  },
+  createDeckRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  createDeckInput: {
+    flex: 1,
+    minWidth: 0,
+  },
+  createDeckButton: {
+    width: 104,
+    borderRadius: 8,
+    backgroundColor: '#263832',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  createDeckButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  checkboxRow: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  checkbox: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#263832',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  checkboxChecked: {
+    backgroundColor: '#263832',
+  },
+  checkboxMark: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  checkboxText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#25312d',
+    fontWeight: '600',
   },
   input: {
     backgroundColor: '#ffffff',
