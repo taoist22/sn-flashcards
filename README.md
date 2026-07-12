@@ -4,7 +4,7 @@
 https://github.com/user-attachments/assets/618ab801-f4fe-4a61-95de-a6d03889f61b
 
 
-Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and Manta. It lets you create decks, add cards manually, turn lassoed handwriting into question/answer cards with OCR, study with FSRS scheduling, and move basic text cards between the plugin and Anki Desktop.
+Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and Manta. It lets you create decks, add cards manually, turn lassoed handwriting into question/answer cards with OCR, keep the front and/or back as actual handwriting instead of recognized text, add optional hints and supplementary images, study with FSRS scheduling, and move basic text cards between the plugin and Anki Desktop.
 
 > **Beta notice:** This plugin is built for Supernote's beta plugin system and beta development OS. Keep backups of important decks, expect occasional rough edges, and test new workflows with a small deck before relying on them heavily.
 
@@ -16,12 +16,18 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 - Optionally add a Supernote keyword when linking a note
 - Use linked notes, note keywords, and folder names to suggest the right deck
 - Add flashcards manually or from handwritten notes with the lasso toolbar
+- Keep a card's front and/or back as your actual handwriting (an image) instead of recognized text
+- Capture handwriting by default, skipping text recognition entirely — useful for non-Latin scripts, math notation, or diagrams that OCR would otherwise mangle
+- Add a context image to a card, sourced from an imported file or lassoed straight from a note
+- Add an optional hint, revealed on request during study, as text or an image
 - Move cards from one deck to another
 - Review cards with a temporary editable guess box
 - Schedule reviews with FSRS
 - View basic deck stats
+- Choose per-card whether an image-based card is included in Anki export
 - Import basic Anki Desktop plain text exports
 - Export decks back to Anki-compatible plain text
+- Card list shows a device-aware tile grid (3 columns on Nomad, 4 on Manta) with image previews
 
 ## Installation
 
@@ -129,14 +135,57 @@ For best OCR results, keep the question and answer on separate horizontal lines 
 
 You can also add a card from a journal or another note that has no linked deck. In that case, choose any existing deck or create a new one before adding the card.
 
+### Keeping a Side as Handwriting Instead of Text
+
+The lasso capture always tries to OCR your handwriting, but it also keeps a cropped image of each line. In the **Question** and **Answer** sections of the Add Flashcard screen, a **Keep as handwriting** checkbox appears under any side that has a captured image.
+
+Turn it on to use your actual handwriting as that side's content instead of the recognized text. The recognized text is not lost — it stays attached to the card as a fallback, used for search and for Anki export if you later include the card in an export.
+
+Handwriting kept this way is a flat image, not editable ink. To change what it says, use **Replace Handwriting** from the Edit screen (see [Editing Cards](#editing-cards)) rather than trying to edit the picture.
+
+### Capturing Handwriting by Default
+
+If you write mostly in a script, notation, or drawing style that OCR doesn't recognize well — Mandarin, math notation, diagrams — text recognition just produces something to clean up on every card. Turn on **Capture handwriting by default (skip text recognition)** at the bottom of the Add Flashcard screen to skip OCR entirely: new lasso captures arrive with both sides already set to handwriting, and nothing is sent through recognition. This is a standing setting — set it once and it stays on for future cards until you turn it off.
+
+## Context Images and Hints
+
+Every card can also carry two optional extras, independent of whether the question and answer are text or handwriting:
+
+- **Context Image** — a supplementary image attached to either the front or the answer. Useful for a diagram or picture that belongs alongside the question or the reveal.
+- **Hint** — text or an image, hidden by default and revealed on request while studying.
+
+Both are added from the **Add Image** section, which appears on the Add Flashcard and Edit Card screens.
+
+### Adding an Image
+
+There are two sources:
+
+- **Add Image** opens a file picker so you can choose any existing image on the device — including a clip saved by the separate FrameClip plugin, if you use it.
+- **Go to Note** closes the plugin so you can lasso an image directly from a note. Lasso either handwritten ink or an inserted picture, then tap **Add Image to Flashcard** in the lasso toolbar. The plugin reopens automatically on the same card.
+
+Either way, once an image arrives you'll see an **"Image added — attach it to"** prompt with three buttons: **Front**, **Answer**, and **Hint**. Tap the one you want; the image is discarded if you tap **Discard** instead.
+
+By default, tapping **Front** or **Answer** attaches the image as a context image next to the existing question/answer content — it doesn't replace anything. Tapping **Hint** always sets the hint directly.
+
+### Replacing Content Instead of Adding to It
+
+If you'd rather the image *become* the front or answer content — for example, building a card where the front, hint, and answer are each an independently sourced image or handwritten line — turn on **Replace front/answer content with image (instead of adding as context)**, the checkbox at the top of the Add Image section. With it on, tapping **Front** or **Answer** sets that side's actual content to the new image (existing text is kept as a fallback, not deleted). This is a standing setting, remembered across cards until you turn it off.
+
+With this on, you can build a card with three independently sourced images — say, an image as the front, one handwritten line as the hint, and a second handwritten line as the answer — by doing three separate "Go to Note → lasso → Add Image to Flashcard → pick a destination" round trips in any order, starting from **Add Manually** rather than the two-line lasso capture (which is specifically for lassoing a question and answer together).
+
+### Managing Context Images and Hints
+
+In the Add Image section, once a context image is attached, you can switch which side it's attached to, move it to the hint instead, or remove it. A hint's image can be removed the same way; hint text is edited directly like the question or answer.
+
 ## Studying Cards
 
 1. Open a deck.
 2. Tap **Study Due** or **Study**.
 3. Read the question.
-4. Use the editable **Guess** box to type or handwrite your answer.
-5. Tap **Show Answer**.
-6. Rate your recall:
+4. If the card has a hint, tap **Show Hint** to reveal it before guessing.
+5. Use the editable **Guess** box to type or handwrite your answer.
+6. Tap **Show Answer**.
+7. Rate your recall:
    - **Again**
    - **Hard**
    - **Good**
@@ -147,12 +196,23 @@ The guess is temporary. It is cleared when you reveal the answer or move to the 
 ## Editing Cards
 
 1. Open a deck.
-2. Tap a card in the card list.
+2. Tap a card tile in the card list.
 3. Edit the question or answer.
 4. Use **Move to Deck** if the card belongs in a different deck.
 5. Tap **Save Card**.
 
 Deleting a card removes it from the plugin and also removes its local review history.
+
+### Editing a Handwritten Side
+
+A side that's set to handwriting shows the captured image instead of a text box, plus two actions:
+
+- **Convert to Text** clears the image and falls back to whatever recognized text exists for that side, letting you type a replacement. This is one-way — there's no button to turn text back into the original image.
+- **Replace Handwriting** sends you to the note to lasso corrected writing, which swaps directly into that same side once you tap **Add Image to Flashcard**. Use this to fix a mistake without losing the card's deck placement or review history. It only appears once a side is already in handwriting mode — a brand new text card doesn't have this option, since there's no original ink to fix.
+
+### Include in Anki Export
+
+Every card has an **Include in Anki export** checkbox on the Edit and Add Flashcard screens. It defaults to on for a fully text card, and off the moment any side, context image, or hint is image-based (see [Anki Export](#anki-export)). You can flip it either way, per card, regardless of content.
 
 ## Anki Import
 
@@ -214,15 +274,21 @@ The export uses Anki-style metadata:
 
 When importing the exported file into Anki Desktop, map the two card fields as front/back. If Anki offers an option to update existing notes, choose it so the GUID column can prevent duplicates.
 
+### Handwriting, Images, and Anki
+
+Anki's plain-text export only has room for two text fields per card — there's no way to embed a handwriting image or a hint into it. Rather than exporting something broken, a card is skipped from export entirely when its **Include in Anki export** checkbox is off, which happens automatically the moment any side, context image, or hint becomes image-based. Skipped cards simply don't appear in the exported file — nothing is written for them, so there's nothing to collide with on a later import.
+
+If you flip a card back to included despite having image content, its recognized-text fallback (if any) is what gets exported for that side; the hint and any context image are never exported regardless of this setting, since Anki's format has no field for them.
+
 ## Current Limitations
 
-- Basic question/answer text cards only
 - No direct `.apkg` or `.colpkg` import
-- No media/audio/image import
 - No cloze support yet
 - No Anki scheduling or stats import
 - No FSRS scheduling sync with Anki
 - Large decks may be slow because the plugin currently stores cards in a JSON database
+- Handwriting kept as an image is a flat picture, not editable ink — there is no way to touch up individual strokes; use **Replace Handwriting** to redo it from fresh lasso input instead
+- Image-based cards are excluded from Anki export by default, and even when included, an image side exports as its recognized-text fallback (or blank) rather than the image itself — hints and context images never export at all
 
 Recommended deck size for this beta is under about 1,000 simple text cards. Larger decks may work, but should be tested carefully.
 
@@ -262,6 +328,8 @@ If you rename the package, clear old files from `build/generated/` before rebuil
 - The note links, keyword defaults, in-flow deck creation, and move-card beta is tagged as `v0.2.0-beta`.
 - Persistent plugin data is stored locally on the device by a small native storage module.
 - FSRS scheduling is handled inside the plugin using `ts-fsrs`.
+- The lasso toolbar registers two custom buttons. **Add Flashcard** (stroke-only) is the entry point for the two-line OCR/handwriting capture and can launch the plugin fresh from a note. **Add Image to Flashcard** (strokes or inserted pictures) drives the Context Image/Hint capture flow and is meant to be used mid-session, via **Go to Note** on an already-open Capture or Edit screen, which closes the plugin and lets the same button reopen it on that same card once you've lassoed.
+- The card list's tile-grid column count is device-aware via `useWindowDimensions`, the same technique the sibling FrameClip plugin uses to distinguish Nomad from Manta screens.
 
 ## License
 

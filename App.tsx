@@ -1,7 +1,8 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -9,6 +10,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {PluginCommAPI, PluginFileAPI, PluginManager} from 'sn-plugin-lib';
@@ -24,13 +26,24 @@ import {
   dueCardsForDeck,
   importCards,
   loadDatabase,
+  resolveIncludeInAnki,
   reviewCard,
+  setDefaultCaptureMode,
+  setImageAttachMode,
   setNoteDefaultDeck,
   updateCard,
 } from './src/services/store';
 import {createDraftFromLasso, type OcrFlashcardDraft} from './src/services/lassoOcr';
+import {
+  buildSideImagePath,
+  captureCurrentLassoAsImage,
+  clearLassoSelection,
+  deleteCardImage,
+  importContextImage,
+  newDraftImageToken,
+} from './src/services/inkCapture';
 import {getRetrievability, ratingLabels, stateLabel} from './src/services/fsrsScheduler';
-import type {Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
+import type {CardSideMode, Deck, Flashcard, FlashcardDatabase} from './src/types/flashcards';
 import {
   exportDeckToAnkiText,
   getImportDropFolder,
@@ -42,6 +55,7 @@ import {
 
 const MAIN_BUTTON_ID = 100;
 const LASSO_BUTTON_ID = 200;
+const IMAGE_CAPTURE_BUTTON_ID = 201;
 
 type Screen = 'decks' | 'cards' | 'edit' | 'study' | 'capture' | 'import';
 
@@ -63,7 +77,18 @@ type ApiResponse<T> = {
   error?: {message?: string};
 } | null | undefined;
 
-const emptyDraft: OcrFlashcardDraft = {
+type CaptureDraft = OcrFlashcardDraft & {
+  questionMode?: CardSideMode;
+  answerMode?: CardSideMode;
+  contextImageSide?: 'front' | 'answer';
+  contextImagePath?: string;
+  hint?: string;
+  hintMode?: CardSideMode;
+  hintImagePath?: string;
+  includeInAnki?: boolean;
+};
+
+const emptyDraft: CaptureDraft = {
   question: '',
   answer: '',
 };
@@ -184,20 +209,24 @@ function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('decks');
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
   const [editingCard, setEditingCard] = useState<Flashcard | null>(null);
-  const [draft, setDraft] = useState<OcrFlashcardDraft>(emptyDraft);
+  const [draft, setDraft] = useState<CaptureDraft>(emptyDraft);
   const [captureLoading, setCaptureLoading] = useState(false);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [showHint, setShowHint] = useState(false);
   const [studyGuess, setStudyGuess] = useState('');
   const [newDeckName, setNewDeckName] = useState('');
   const [captureDeckName, setCaptureDeckName] = useState('');
-  const [linkDefaultOnApply, setLinkDefaultOnApply] = useState(true);
-  const [addKeywordOnApply, setAddKeywordOnApply] = useState(true);
-  const [captureLinkDefault, setCaptureLinkDefault] = useState(true);
-  const [captureAddKeyword, setCaptureAddKeyword] = useState(true);
+  const [linkDefaultOnApply, setLinkDefaultOnApply] = useState(false);
+  const [addKeywordOnApply, setAddKeywordOnApply] = useState(false);
+  const [captureLinkDefault, setCaptureLinkDefault] = useState(false);
+  const [captureAddKeyword, setCaptureAddKeyword] = useState(false);
   const [noteContext, setNoteContext] = useState<NoteContext | null>(null);
   const [noteDeckMatch, setNoteDeckMatch] = useState<NoteDeckMatch | null>(null);
   const [importFiles, setImportFiles] = useState<string[]>([]);
   const [importFolder, setImportFolder] = useState('');
+  const [pendingCapturedImage, setPendingCapturedImage] = useState<string | null>(null);
+  const screenRef = useRef<Screen>('decks');
+  const pendingReplaceRef = useRef<'question' | 'answer' | null>(null);
 
   const selectedDeck = useMemo(
     () => db?.decks.find(deck => deck.id === selectedDeckId) ?? db?.decks[0],
@@ -228,6 +257,7 @@ function App(): React.JSX.Element {
     setSelectedDeckId(
       current => noteMatch?.deckId ?? current ?? loaded.decks[0]?.id ?? null,
     );
+    return loaded;
   }, []);
 
   const loadLassoDraft = useCallback(async () => {
@@ -235,9 +265,18 @@ function App(): React.JSX.Element {
     setScreen('capture');
     setDraft(emptyDraft);
     try {
-      await refresh();
-      const nextDraft = await createDraftFromLasso();
-      setDraft(nextDraft);
+      const loaded = await refresh();
+      const handwritingDefault = loaded?.settings?.defaultCaptureMode === 'image';
+      const nextDraft = await createDraftFromLasso({skipOcr: handwritingDefault});
+      setDraft(
+        handwritingDefault
+          ? {
+              ...nextDraft,
+              questionMode: nextDraft.questionImagePath ? 'image' : undefined,
+              answerMode: nextDraft.answerImagePath ? 'image' : undefined,
+            }
+          : nextDraft,
+      );
     } catch (error) {
       setDraft(emptyDraft);
       Alert.alert(
@@ -250,6 +289,155 @@ function App(): React.JSX.Element {
   }, [refresh]);
 
   useEffect(() => {
+    screenRef.current = screen;
+    if (screen !== 'edit') {
+      pendingReplaceRef.current = null;
+    }
+  }, [screen]);
+
+  // Captures whatever is currently lassoed (ink or an inserted image). Does
+  // not decide where it goes yet — Capture/Edit screens show a prompt for
+  // that once the image lands, via pendingCapturedImage. Reads screenRef
+  // instead of `screen` so this callback's identity never changes, which
+  // keeps the button-listener effect below from ever needing to
+  // re-subscribe mid-flow.
+  const captureNoteImage = useCallback(async () => {
+    if (screenRef.current !== 'capture' && screenRef.current !== 'edit') {
+      pendingReplaceRef.current = null;
+      Alert.alert(
+        'No card open',
+        'Open Add Flashcard or Edit Card first, then lasso the image and try again.',
+      );
+      return;
+    }
+
+    const replaceSide = pendingReplaceRef.current;
+    pendingReplaceRef.current = null;
+
+    try {
+      const path = await buildSideImagePath(
+        newDraftImageToken(),
+        replaceSide ?? 'capture',
+      );
+      const success = await captureCurrentLassoAsImage(path);
+      if (!success) {
+        Alert.alert('Could not capture image', 'Try lassoing the region again.');
+        return;
+      }
+
+      // Armed by "Replace Handwriting" on a specific side in the Edit screen:
+      // swap directly into that side instead of asking where it goes.
+      if (replaceSide && screenRef.current === 'edit') {
+        setEditingCard(current => {
+          if (!current) {
+            return current;
+          }
+          const oldPath =
+            replaceSide === 'question' ? current.questionImagePath : current.answerImagePath;
+          deleteCardImage(oldPath);
+          return replaceSide === 'question'
+            ? {...current, questionMode: 'image', questionImagePath: path}
+            : {...current, answerMode: 'image', answerImagePath: path};
+        });
+        return;
+      }
+
+      setPendingCapturedImage(path);
+    } finally {
+      await clearLassoSelection();
+    }
+  }, []);
+
+  const attachCapturedImage = (target: 'front' | 'answer' | 'hint') => {
+    if (!pendingCapturedImage) {
+      return;
+    }
+    const path = pendingCapturedImage;
+    setPendingCapturedImage(null);
+    const replaceMode = db?.settings?.imageAttachMode === 'replace';
+
+    const applyToDraft = (current: CaptureDraft): CaptureDraft => {
+      if (target === 'hint') {
+        return {...current, hintImagePath: path, hintMode: 'image'};
+      }
+      if (replaceMode) {
+        if (target === 'front') {
+          deleteCardImage(current.questionImagePath);
+          return {...current, questionMode: 'image', questionImagePath: path};
+        }
+        deleteCardImage(current.answerImagePath);
+        return {...current, answerMode: 'image', answerImagePath: path};
+      }
+      return {...current, contextImagePath: path, contextImageSide: target};
+    };
+
+    const applyToCard = (current: Flashcard): Flashcard => {
+      if (target === 'hint') {
+        return {...current, hintImagePath: path, hintMode: 'image'};
+      }
+      if (replaceMode) {
+        if (target === 'front') {
+          deleteCardImage(current.questionImagePath);
+          return {...current, questionMode: 'image', questionImagePath: path};
+        }
+        deleteCardImage(current.answerImagePath);
+        return {...current, answerMode: 'image', answerImagePath: path};
+      }
+      return {...current, contextImagePath: path, contextImageSide: target};
+    };
+
+    if (screen === 'capture') {
+      setDraft(applyToDraft);
+    } else if (screen === 'edit') {
+      setEditingCard(current => (current ? applyToCard(current) : current));
+    }
+  };
+
+  const discardCapturedImage = () => {
+    if (pendingCapturedImage) {
+      deleteCardImage(pendingCapturedImage);
+    }
+    setPendingCapturedImage(null);
+  };
+
+  // "Add Image" file imports flow through the same pending chooser as lasso
+  // captures, so attachment (front/answer/hint) is decided in one place.
+  const importImageToPending = async () => {
+    try {
+      const path = await importContextImage();
+      if (path) {
+        setPendingCapturedImage(path);
+      }
+    } catch (error) {
+      Alert.alert(
+        'Could not add image',
+        error instanceof Error ? error.message : 'Try picking the image again.',
+      );
+    }
+  };
+
+  const goToNote = () => {
+    PluginManager.closePluginView();
+  };
+
+  const replaceHandwritingFromNote = (side: 'question' | 'answer') => {
+    pendingReplaceRef.current = side;
+    goToNote();
+  };
+
+  const toggleDefaultCaptureMode = async () => {
+    const current = db?.settings?.defaultCaptureMode === 'image';
+    const next = await setDefaultCaptureMode(requireDb(), current ? 'text' : 'image');
+    setDb(next);
+  };
+
+  const toggleImageAttachMode = async () => {
+    const current = db?.settings?.imageAttachMode === 'replace';
+    const next = await setImageAttachMode(requireDb(), current ? 'context' : 'replace');
+    setDb(next);
+  };
+
+  useEffect(() => {
     refresh();
   }, [refresh]);
 
@@ -260,6 +448,10 @@ function App(): React.JSX.Element {
           loadLassoDraft();
           return;
         }
+        if (event.id === IMAGE_CAPTURE_BUTTON_ID) {
+          captureNoteImage();
+          return;
+        }
         if (event.id === MAIN_BUTTON_ID) {
           refresh().catch(() => undefined);
           setScreen('decks');
@@ -268,7 +460,7 @@ function App(): React.JSX.Element {
     });
 
     return () => subscription.remove();
-  }, [loadLassoDraft, refresh]);
+  }, [captureNoteImage, loadLassoDraft, refresh]);
 
   const close = () => {
     PluginManager.closePluginView();
@@ -389,14 +581,48 @@ function App(): React.JSX.Element {
   };
 
   const saveDraftCard = async () => {
-    if (!selectedDeck || !draft.question.trim() || !draft.answer.trim()) {
-      Alert.alert('Question and answer needed', 'Add both sides before saving.');
+    const questionOk =
+      draft.questionMode === 'image'
+        ? Boolean(draft.questionImagePath)
+        : Boolean(draft.question.trim());
+    const answerOk =
+      draft.answerMode === 'image'
+        ? Boolean(draft.answerImagePath)
+        : Boolean(draft.answer.trim());
+
+    if (!selectedDeck || !questionOk || !answerOk) {
+      Alert.alert(
+        'Question and answer needed',
+        'Add both sides (text or handwriting) before saving.',
+      );
       return;
     }
+
+    // Clean up generated ink images for sides the user left as text.
+    if (draft.questionMode !== 'image' && draft.questionImagePath) {
+      deleteCardImage(draft.questionImagePath);
+    }
+    if (draft.answerMode !== 'image' && draft.answerImagePath) {
+      deleteCardImage(draft.answerImagePath);
+    }
+    if (draft.hintMode !== 'image' && draft.hintImagePath) {
+      deleteCardImage(draft.hintImagePath);
+    }
+
     const next = await addCard(requireDb(), {
       deckId: selectedDeck.id,
       question: draft.question,
       answer: draft.answer,
+      questionMode: draft.questionMode,
+      answerMode: draft.answerMode,
+      questionImagePath: draft.questionMode === 'image' ? draft.questionImagePath : undefined,
+      answerImagePath: draft.answerMode === 'image' ? draft.answerImagePath : undefined,
+      contextImageSide: draft.contextImageSide,
+      contextImagePath: draft.contextImagePath,
+      hint: draft.hint,
+      hintMode: draft.hintMode,
+      hintImagePath: draft.hintMode === 'image' ? draft.hintImagePath : undefined,
+      includeInAnki: draft.includeInAnki,
       sourceNotePath: draft.sourceNotePath,
       sourcePage: draft.sourcePage,
     });
@@ -413,6 +639,16 @@ function App(): React.JSX.Element {
       deckId: editingCard.deckId,
       question: editingCard.question,
       answer: editingCard.answer,
+      questionMode: editingCard.questionMode,
+      answerMode: editingCard.answerMode,
+      questionImagePath: editingCard.questionImagePath,
+      answerImagePath: editingCard.answerImagePath,
+      contextImageSide: editingCard.contextImageSide,
+      contextImagePath: editingCard.contextImagePath,
+      hint: editingCard.hint,
+      hintMode: editingCard.hintMode,
+      hintImagePath: editingCard.hintImagePath,
+      includeInAnki: editingCard.includeInAnki,
     });
     setDb(next);
     setEditingCard(null);
@@ -517,6 +753,7 @@ function App(): React.JSX.Element {
     const next = await reviewCard(requireDb(), activeStudyCard.id, rating);
     setDb(next);
     setShowAnswer(false);
+    setShowHint(false);
     setStudyGuess('');
   };
 
@@ -596,6 +833,7 @@ function App(): React.JSX.Element {
             dueCount={dueCards.length}
             onStudy={() => {
               setShowAnswer(false);
+              setShowHint(false);
               setStudyGuess('');
               setScreen('study');
             }}
@@ -629,6 +867,15 @@ function App(): React.JSX.Element {
             onCreateDeck={createDeckFromCapture}
             onToggleLinkDefault={() => setCaptureLinkDefault(current => !current)}
             onToggleAddKeyword={() => setCaptureAddKeyword(current => !current)}
+            pendingCapturedImage={pendingCapturedImage}
+            onAttachCapturedImage={attachCapturedImage}
+            onDiscardCapturedImage={discardCapturedImage}
+            onImportImage={importImageToPending}
+            onGoToNote={goToNote}
+            handwritingDefault={db.settings?.defaultCaptureMode === 'image'}
+            onToggleHandwritingDefault={toggleDefaultCaptureMode}
+            imageAttachMode={db.settings?.imageAttachMode === 'replace'}
+            onToggleImageAttachMode={toggleImageAttachMode}
             onSave={saveDraftCard}
           />
         )}
@@ -638,6 +885,14 @@ function App(): React.JSX.Element {
             card={editingCard}
             decks={db.decks}
             onChange={setEditingCard}
+            pendingCapturedImage={pendingCapturedImage}
+            onAttachCapturedImage={attachCapturedImage}
+            onDiscardCapturedImage={discardCapturedImage}
+            onImportImage={importImageToPending}
+            onGoToNote={goToNote}
+            onReplaceHandwriting={replaceHandwritingFromNote}
+            imageAttachMode={db.settings?.imageAttachMode === 'replace'}
+            onToggleImageAttachMode={toggleImageAttachMode}
             onSave={saveEditedCard}
           />
         )}
@@ -646,8 +901,10 @@ function App(): React.JSX.Element {
           <StudyScreen
             card={activeStudyCard}
             showAnswer={showAnswer}
+            showHint={showHint}
             guess={studyGuess}
             onGuessChange={setStudyGuess}
+            onRevealHint={() => setShowHint(true)}
             onReveal={() => {
               setStudyGuess('');
               setShowAnswer(true);
@@ -945,6 +1202,12 @@ function CardsScreen({
   onDelete: (card: Flashcard) => void;
 }) {
   const stats = deckStats(db, deck.id);
+  // Same Nomad-vs-Manta detection FrameClip already uses: Supernote's device-type
+  // API doesn't cleanly distinguish Manta, so go by actual screen width instead.
+  const {width} = useWindowDimensions();
+  const columns = width >= 1500 ? 4 : 3;
+  const tileWidthPercent = `${100 / columns - 2}%` as const;
+
   return (
     <View>
       <View style={styles.statsGrid}>
@@ -969,26 +1232,85 @@ function CardsScreen({
           No cards yet. Use Add Manually here, or lasso two handwritten lines in a note and choose Add Flashcard.
         </Text>
       ) : (
-        cards.map(card => {
-          const retention = getRetrievability(card.fsrs);
-          return (
-            <View key={card.id} style={styles.rowCard}>
-              <Pressable style={styles.rowMain} onPress={() => onEdit(card)}>
-                <Text style={styles.cardTitle} numberOfLines={2}>
-                  {card.question}
-                </Text>
-                <Text style={styles.muted} numberOfLines={1}>
-                  {stateLabel(card.fsrs.state)} · due {formatDate(card.fsrs.due)}
-                  {retention == null ? '' : ` · ${Math.round(retention * 100)}%`}
-                </Text>
-              </Pressable>
-              <Pressable onPress={() => onDelete(card)} style={styles.plainButton}>
-                <Text style={styles.warningText}>Delete</Text>
-              </Pressable>
-            </View>
-          );
-        })
+        <View style={styles.cardGrid}>
+          {cards.map(card => {
+            const retention = getRetrievability(card.fsrs);
+            const hasImage = card.questionMode === 'image' && card.questionImagePath;
+            return (
+              <View key={card.id} style={[styles.cardTile, {width: tileWidthPercent}]}>
+                <Pressable onPress={() => onEdit(card)}>
+                  {hasImage ? (
+                    <Image
+                      source={{uri: `file://${card.questionImagePath}`}}
+                      style={styles.cardTileImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={styles.cardTileTextBox}>
+                      <Text style={styles.cardTitle} numberOfLines={5}>
+                        {card.question.trim()}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.muted} numberOfLines={1}>
+                    {stateLabel(card.fsrs.state)} · due {formatDate(card.fsrs.due)}
+                    {retention == null ? '' : ` · ${Math.round(retention * 100)}%`}
+                  </Text>
+                </Pressable>
+                <Pressable onPress={() => onDelete(card)} style={styles.plainButton}>
+                  <Text style={styles.warningText}>Delete</Text>
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
       )}
+    </View>
+  );
+}
+
+function SectionCard({title, children}: {title: string; children: React.ReactNode}) {
+  return (
+    <View style={styles.sectionCard}>
+      <Text style={styles.sectionHeader}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
+// Preview + attach chooser shown after an image arrives (lasso capture or
+// file import), before it's assigned to front/answer/hint.
+function PendingImageChooser({
+  path,
+  onAttach,
+  onDiscard,
+}: {
+  path: string;
+  onAttach: (target: 'front' | 'answer' | 'hint') => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <View style={styles.capturedImageBanner}>
+      <Text style={styles.label}>Image added — attach it to:</Text>
+      <Image
+        source={{uri: `file://${path}`}}
+        style={styles.sideImagePreview}
+        resizeMode="contain"
+      />
+      <View style={styles.imageSourceRow}>
+        <Pressable onPress={() => onAttach('front')} style={styles.createDeckButton}>
+          <Text style={styles.createDeckButtonText}>Front</Text>
+        </Pressable>
+        <Pressable onPress={() => onAttach('answer')} style={styles.createDeckButton}>
+          <Text style={styles.createDeckButtonText}>Answer</Text>
+        </Pressable>
+        <Pressable onPress={() => onAttach('hint')} style={styles.createDeckButton}>
+          <Text style={styles.createDeckButtonText}>Hint</Text>
+        </Pressable>
+      </View>
+      <Pressable onPress={onDiscard} style={styles.linkButton}>
+        <Text style={styles.linkButtonText}>Discard</Text>
+      </Pressable>
     </View>
   );
 }
@@ -1008,9 +1330,18 @@ function CaptureScreen({
   onCreateDeck,
   onToggleLinkDefault,
   onToggleAddKeyword,
+  pendingCapturedImage,
+  onAttachCapturedImage,
+  onDiscardCapturedImage,
+  onImportImage,
+  onGoToNote,
+  handwritingDefault,
+  onToggleHandwritingDefault,
+  imageAttachMode,
+  onToggleImageAttachMode,
   onSave,
 }: {
-  draft: OcrFlashcardDraft;
+  draft: CaptureDraft;
   decks: Deck[];
   selectedDeckId: string;
   newDeckName: string;
@@ -1018,14 +1349,53 @@ function CaptureScreen({
   linkDefaultOnCreate: boolean;
   addKeywordOnCreate: boolean;
   loading: boolean;
-  onChangeDraft: (draft: OcrFlashcardDraft) => void;
+  onChangeDraft: (draft: CaptureDraft) => void;
   onSelectDeck: (deckId: string) => void;
   onNewDeckName: (name: string) => void;
   onCreateDeck: () => void;
   onToggleLinkDefault: () => void;
   onToggleAddKeyword: () => void;
+  pendingCapturedImage: string | null;
+  onAttachCapturedImage: (target: 'front' | 'answer' | 'hint') => void;
+  onDiscardCapturedImage: () => void;
+  onImportImage: () => void;
+  onGoToNote: () => void;
+  handwritingDefault: boolean;
+  onToggleHandwritingDefault: () => void;
+  imageAttachMode: boolean;
+  onToggleImageAttachMode: () => void;
   onSave: () => void;
 }) {
+  const removeContextImage = () => {
+    if (draft.contextImagePath) {
+      deleteCardImage(draft.contextImagePath);
+    }
+    onChangeDraft({...draft, contextImagePath: undefined, contextImageSide: undefined});
+  };
+
+  const removeHintImage = () => {
+    if (draft.hintImagePath) {
+      deleteCardImage(draft.hintImagePath);
+    }
+    onChangeDraft({...draft, hintImagePath: undefined, hintMode: 'text'});
+  };
+
+  const moveContextImage = (target: 'front' | 'answer' | 'hint') => {
+    if (target === 'hint') {
+      onChangeDraft({
+        ...draft,
+        hintImagePath: draft.contextImagePath,
+        hintMode: 'image',
+        contextImagePath: undefined,
+        contextImageSide: undefined,
+      });
+    } else {
+      onChangeDraft({...draft, contextImageSide: target});
+    }
+  };
+
+  const effectiveIncludeInAnki = draft.includeInAnki ?? resolveIncludeInAnki(draft);
+
   return (
     <View style={styles.captureScreen}>
       <Text style={styles.sectionTitle}>Add Flashcard</Text>
@@ -1036,8 +1406,163 @@ function CaptureScreen({
         </View>
       ) : null}
 
-      <View style={styles.inlineCreateBlock}>
-        <Text style={styles.blockTitle}>Create Deck</Text>
+      <SectionCard title="Question">
+        {draft.questionMode === 'image' && draft.questionImagePath ? (
+          <Image
+            source={{uri: `file://${draft.questionImagePath}`}}
+            style={styles.sideImagePreview}
+            resizeMode="contain"
+          />
+        ) : (
+          <TextInput
+            value={draft.question}
+            onChangeText={question => onChangeDraft({...draft, question})}
+            multiline
+            placeholder="Question"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+        {draft.questionImagePath && (
+          <CheckRow
+            label="Keep as handwriting"
+            checked={draft.questionMode === 'image'}
+            onPress={() =>
+              onChangeDraft({
+                ...draft,
+                questionMode: draft.questionMode === 'image' ? 'text' : 'image',
+              })
+            }
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Hint (optional)">
+        {draft.hintMode === 'image' && draft.hintImagePath ? (
+          <Image
+            source={{uri: `file://${draft.hintImagePath}`}}
+            style={styles.sideImagePreview}
+            resizeMode="contain"
+          />
+        ) : (
+          <TextInput
+            value={draft.hint ?? ''}
+            onChangeText={hint => onChangeDraft({...draft, hint})}
+            multiline
+            placeholder="Revealed on request during study"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+        {draft.hintImagePath && (
+          <>
+            <CheckRow
+              label="Show hint as image"
+              checked={draft.hintMode === 'image'}
+              onPress={() =>
+                onChangeDraft({
+                  ...draft,
+                  hintMode: draft.hintMode === 'image' ? 'text' : 'image',
+                })
+              }
+            />
+            <Pressable onPress={removeHintImage} style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Remove Hint Image</Text>
+            </Pressable>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Answer">
+        {draft.answerMode === 'image' && draft.answerImagePath ? (
+          <Image
+            source={{uri: `file://${draft.answerImagePath}`}}
+            style={styles.sideImagePreview}
+            resizeMode="contain"
+          />
+        ) : (
+          <TextInput
+            value={draft.answer}
+            onChangeText={answer => onChangeDraft({...draft, answer})}
+            multiline
+            placeholder="Answer"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+        {draft.answerImagePath && (
+          <CheckRow
+            label="Keep as handwriting"
+            checked={draft.answerMode === 'image'}
+            onPress={() =>
+              onChangeDraft({
+                ...draft,
+                answerMode: draft.answerMode === 'image' ? 'text' : 'image',
+              })
+            }
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Add Image">
+        <CheckRow
+          label="Replace front/answer content with image (instead of adding as context)"
+          checked={imageAttachMode}
+          onPress={onToggleImageAttachMode}
+        />
+        {pendingCapturedImage ? (
+          <PendingImageChooser
+            path={pendingCapturedImage}
+            onAttach={onAttachCapturedImage}
+            onDiscard={onDiscardCapturedImage}
+          />
+        ) : (
+          <>
+            <View style={styles.imageSourceRow}>
+              <Pressable onPress={onImportImage} style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Add Image</Text>
+              </Pressable>
+              <Pressable onPress={onGoToNote} style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Go to Note</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.helperText}>
+              Add Image picks a file. Go to Note lets you lasso the image, then tap "Add Image
+              to Flashcard" in the lasso toolbar; you'll pick Front, Answer, or Hint back here.
+            </Text>
+          </>
+        )}
+        {draft.contextImagePath && (
+          <>
+            <Image
+              source={{uri: `file://${draft.contextImagePath}`}}
+              style={styles.sideImagePreview}
+              resizeMode="contain"
+            />
+            <CheckRow
+              label="Attached to front"
+              checked={draft.contextImageSide === 'front'}
+              onPress={() => moveContextImage('front')}
+            />
+            <CheckRow
+              label="Attached to answer"
+              checked={draft.contextImageSide === 'answer'}
+              onPress={() => moveContextImage('answer')}
+            />
+            <CheckRow
+              label="Attached to hint"
+              checked={false}
+              onPress={() => moveContextImage('hint')}
+            />
+            <Pressable onPress={removeContextImage} style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Remove Image</Text>
+            </Pressable>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Deck">
+        <DeckChooser decks={decks} selectedDeckId={selectedDeckId} onSelect={onSelectDeck} />
         <View style={styles.createDeckRow}>
           <TextInput
             value={newDeckName}
@@ -1064,30 +1589,18 @@ function CaptureScreen({
             />
           </>
         )}
-      </View>
+      </SectionCard>
 
-      <Text style={styles.label}>Question</Text>
-      <TextInput
-        value={draft.question}
-        onChangeText={question => onChangeDraft({...draft, question})}
-        multiline
-        placeholder="Question"
-        placeholderTextColor="#74746c"
-        style={[styles.input, styles.textArea]}
+      <CheckRow
+        label="Include in Anki export"
+        checked={effectiveIncludeInAnki}
+        onPress={() => onChangeDraft({...draft, includeInAnki: !effectiveIncludeInAnki})}
       />
-
-      <Text style={styles.label}>Answer</Text>
-      <TextInput
-        value={draft.answer}
-        onChangeText={answer => onChangeDraft({...draft, answer})}
-        multiline
-        placeholder="Answer"
-        placeholderTextColor="#74746c"
-        style={[styles.input, styles.textArea]}
+      <CheckRow
+        label="Capture handwriting by default (skip text recognition)"
+        checked={handwritingDefault}
+        onPress={onToggleHandwritingDefault}
       />
-
-      <Text style={styles.label}>Deck</Text>
-      <DeckChooser decks={decks} selectedDeckId={selectedDeckId} onSelect={onSelectDeck} />
 
       <PrimaryButton label="Add Flashcard" onPress={onSave} />
     </View>
@@ -1098,40 +1611,240 @@ function EditScreen({
   card,
   decks,
   onChange,
+  pendingCapturedImage,
+  onAttachCapturedImage,
+  onDiscardCapturedImage,
+  onImportImage,
+  onGoToNote,
+  onReplaceHandwriting,
+  imageAttachMode,
+  onToggleImageAttachMode,
   onSave,
 }: {
   card: Flashcard;
   decks: Deck[];
   onChange: (card: Flashcard) => void;
+  pendingCapturedImage: string | null;
+  onAttachCapturedImage: (target: 'front' | 'answer' | 'hint') => void;
+  onDiscardCapturedImage: () => void;
+  onImportImage: () => void;
+  onGoToNote: () => void;
+  onReplaceHandwriting: (side: 'question' | 'answer') => void;
+  imageAttachMode: boolean;
+  onToggleImageAttachMode: () => void;
   onSave: () => void;
 }) {
   const currentDeck = decks.find(deck => deck.id === card.deckId);
+
+  const removeContextImage = () => {
+    if (card.contextImagePath) {
+      deleteCardImage(card.contextImagePath);
+    }
+    onChange({...card, contextImagePath: undefined, contextImageSide: undefined});
+  };
+
+  const removeHintImage = () => {
+    if (card.hintImagePath) {
+      deleteCardImage(card.hintImagePath);
+    }
+    onChange({...card, hintImagePath: undefined, hintMode: 'text'});
+  };
+
+  const moveContextImage = (target: 'front' | 'answer' | 'hint') => {
+    if (target === 'hint') {
+      onChange({
+        ...card,
+        hintImagePath: card.contextImagePath,
+        hintMode: 'image',
+        contextImagePath: undefined,
+        contextImageSide: undefined,
+      });
+    } else {
+      onChange({...card, contextImageSide: target});
+    }
+  };
+
+  const effectiveIncludeInAnki = card.includeInAnki ?? resolveIncludeInAnki(card);
+
   return (
     <View>
       <Text style={styles.sectionTitle}>Edit Card</Text>
-      <Text style={styles.label}>Question</Text>
-      <TextInput
-        value={card.question}
-        onChangeText={question => onChange({...card, question})}
-        multiline
-        style={[styles.input, styles.textArea]}
+
+      <SectionCard title="Question">
+        {card.questionMode === 'image' && card.questionImagePath ? (
+          <>
+            <Image
+              source={{uri: `file://${card.questionImagePath}`}}
+              style={styles.sideImagePreview}
+              resizeMode="contain"
+            />
+            <View style={styles.imageSourceRow}>
+              <Pressable
+                onPress={() => onReplaceHandwriting('question')}
+                style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Replace Handwriting</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              onPress={() => {
+                deleteCardImage(card.questionImagePath);
+                onChange({...card, questionMode: 'text', questionImagePath: undefined});
+              }}
+              style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Convert to Text</Text>
+            </Pressable>
+          </>
+        ) : (
+          <TextInput
+            value={card.question}
+            onChangeText={question => onChange({...card, question})}
+            multiline
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Hint (optional)">
+        {card.hintMode === 'image' && card.hintImagePath ? (
+          <Image
+            source={{uri: `file://${card.hintImagePath}`}}
+            style={styles.sideImagePreview}
+            resizeMode="contain"
+          />
+        ) : (
+          <TextInput
+            value={card.hint ?? ''}
+            onChangeText={hint => onChange({...card, hint})}
+            multiline
+            placeholder="Revealed on request during study"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+        {card.hintImagePath && (
+          <>
+            <CheckRow
+              label="Show hint as image"
+              checked={card.hintMode === 'image'}
+              onPress={() =>
+                onChange({...card, hintMode: card.hintMode === 'image' ? 'text' : 'image'})
+              }
+            />
+            <Pressable onPress={removeHintImage} style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Remove Hint Image</Text>
+            </Pressable>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Answer">
+        {card.answerMode === 'image' && card.answerImagePath ? (
+          <>
+            <Image
+              source={{uri: `file://${card.answerImagePath}`}}
+              style={styles.sideImagePreview}
+              resizeMode="contain"
+            />
+            <View style={styles.imageSourceRow}>
+              <Pressable
+                onPress={() => onReplaceHandwriting('answer')}
+                style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Replace Handwriting</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              onPress={() => {
+                deleteCardImage(card.answerImagePath);
+                onChange({...card, answerMode: 'text', answerImagePath: undefined});
+              }}
+              style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Convert to Text</Text>
+            </Pressable>
+          </>
+        ) : (
+          <TextInput
+            value={card.answer}
+            onChangeText={answer => onChange({...card, answer})}
+            multiline
+            style={[styles.input, styles.textArea]}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Add Image">
+        <CheckRow
+          label="Replace front/answer content with image (instead of adding as context)"
+          checked={imageAttachMode}
+          onPress={onToggleImageAttachMode}
+        />
+        {pendingCapturedImage ? (
+          <PendingImageChooser
+            path={pendingCapturedImage}
+            onAttach={onAttachCapturedImage}
+            onDiscard={onDiscardCapturedImage}
+          />
+        ) : (
+          <>
+            <View style={styles.imageSourceRow}>
+              <Pressable onPress={onImportImage} style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Add Image</Text>
+              </Pressable>
+              <Pressable onPress={onGoToNote} style={styles.createDeckButton}>
+                <Text style={styles.createDeckButtonText}>Go to Note</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.helperText}>
+              Add Image picks a file. Go to Note lets you lasso the image, then tap "Add Image
+              to Flashcard" in the lasso toolbar; you'll pick Front, Answer, or Hint back here.
+            </Text>
+          </>
+        )}
+        {card.contextImagePath && (
+          <>
+            <Image
+              source={{uri: `file://${card.contextImagePath}`}}
+              style={styles.sideImagePreview}
+              resizeMode="contain"
+            />
+            <CheckRow
+              label="Attached to front"
+              checked={card.contextImageSide === 'front'}
+              onPress={() => moveContextImage('front')}
+            />
+            <CheckRow
+              label="Attached to answer"
+              checked={card.contextImageSide === 'answer'}
+              onPress={() => moveContextImage('answer')}
+            />
+            <CheckRow
+              label="Attached to hint"
+              checked={false}
+              onPress={() => moveContextImage('hint')}
+            />
+            <Pressable onPress={removeContextImage} style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Remove Image</Text>
+            </Pressable>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Move to Deck">
+        <Text style={styles.muted}>
+          Currently in {currentDeck?.name ?? 'selected deck'}
+        </Text>
+        <DeckChooser
+          decks={decks}
+          selectedDeckId={card.deckId}
+          onSelect={deckId => onChange({...card, deckId})}
+        />
+      </SectionCard>
+
+      <CheckRow
+        label="Include in Anki export"
+        checked={effectiveIncludeInAnki}
+        onPress={() => onChange({...card, includeInAnki: !effectiveIncludeInAnki})}
       />
-      <Text style={styles.label}>Answer</Text>
-      <TextInput
-        value={card.answer}
-        onChangeText={answer => onChange({...card, answer})}
-        multiline
-        style={[styles.input, styles.textArea]}
-      />
-      <Text style={styles.label}>Move to Deck</Text>
-      <Text style={styles.muted}>
-        Currently in {currentDeck?.name ?? 'selected deck'}
-      </Text>
-      <DeckChooser
-        decks={decks}
-        selectedDeckId={card.deckId}
-        onSelect={deckId => onChange({...card, deckId})}
-      />
+
       <PrimaryButton label="Save Card" onPress={onSave} />
     </View>
   );
@@ -1140,18 +1853,34 @@ function EditScreen({
 function StudyScreen({
   card,
   showAnswer,
+  showHint,
   guess,
   onGuessChange,
+  onRevealHint,
   onReveal,
   onRate,
 }: {
   card: Flashcard | null;
   showAnswer: boolean;
+  showHint: boolean;
   guess: string;
   onGuessChange: (guess: string) => void;
+  onRevealHint: () => void;
   onReveal: () => void;
   onRate: (rating: Grade) => void;
 }) {
+  const [questionImageFailed, setQuestionImageFailed] = useState(false);
+  const [answerImageFailed, setAnswerImageFailed] = useState(false);
+  const [contextImageFailed, setContextImageFailed] = useState(false);
+  const [hintImageFailed, setHintImageFailed] = useState(false);
+
+  useEffect(() => {
+    setQuestionImageFailed(false);
+    setAnswerImageFailed(false);
+    setContextImageFailed(false);
+    setHintImageFailed(false);
+  }, [card?.id]);
+
   if (!card) {
     return (
       <View style={styles.centerBlock}>
@@ -1161,11 +1890,55 @@ function StudyScreen({
     );
   }
 
+  const contextImage =
+    card.contextImagePath && !contextImageFailed ? (
+      <Image
+        source={{uri: `file://${card.contextImagePath}`}}
+        style={styles.studyImage}
+        resizeMode="contain"
+        onError={() => setContextImageFailed(true)}
+      />
+    ) : null;
+
   return (
     <View>
       <View style={styles.studyCard}>
         <Text style={styles.label}>Question</Text>
-        <Text style={styles.studyText}>{card.question}</Text>
+        {card.questionMode === 'image' && card.questionImagePath && !questionImageFailed ? (
+          <Image
+            source={{uri: `file://${card.questionImagePath}`}}
+            style={styles.studyImage}
+            resizeMode="contain"
+            onError={() => setQuestionImageFailed(true)}
+          />
+        ) : (
+          <Text style={styles.studyText}>{card.question}</Text>
+        )}
+        {card.contextImageSide === 'front' && contextImage}
+        {!showAnswer && (card.hint?.trim() || card.hintImagePath) && (
+          <>
+            <View style={styles.divider} />
+            {showHint ? (
+              <>
+                <Text style={styles.label}>Hint</Text>
+                {card.hintMode === 'image' && card.hintImagePath && !hintImageFailed ? (
+                  <Image
+                    source={{uri: `file://${card.hintImagePath}`}}
+                    style={styles.studyImage}
+                    resizeMode="contain"
+                    onError={() => setHintImageFailed(true)}
+                  />
+                ) : (
+                  <Text style={styles.studyText}>{card.hint}</Text>
+                )}
+              </>
+            ) : (
+              <Pressable onPress={onRevealHint} style={styles.linkButton}>
+                <Text style={styles.linkButtonText}>Show Hint</Text>
+              </Pressable>
+            )}
+          </>
+        )}
         {!showAnswer ? (
           <>
             <View style={styles.divider} />
@@ -1183,7 +1956,17 @@ function StudyScreen({
           <>
             <View style={styles.divider} />
             <Text style={styles.label}>Answer</Text>
-            <Text style={styles.studyText}>{card.answer}</Text>
+            {card.answerMode === 'image' && card.answerImagePath && !answerImageFailed ? (
+              <Image
+                source={{uri: `file://${card.answerImagePath}`}}
+                style={styles.studyImage}
+                resizeMode="contain"
+                onError={() => setAnswerImageFailed(true)}
+              />
+            ) : (
+              <Text style={styles.studyText}>{card.answer}</Text>
+            )}
+            {card.contextImageSide === 'answer' && contextImage}
           </>
         )}
       </View>
@@ -1355,6 +2138,35 @@ const styles = StyleSheet.create({
   rowMain: {
     flex: 1,
   },
+  cardGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  cardTile: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d7d7ce',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 10,
+  },
+  cardTileImage: {
+    width: '100%',
+    height: 130,
+    borderRadius: 6,
+    backgroundColor: '#eef0ea',
+    marginBottom: 6,
+  },
+  cardTileTextBox: {
+    width: '100%',
+    height: 130,
+    borderRadius: 6,
+    backgroundColor: '#eef0ea',
+    padding: 8,
+    marginBottom: 6,
+    justifyContent: 'center',
+  },
   noteStatus: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -1429,6 +2241,39 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: 8,
   },
+  helperText: {
+    fontSize: 13,
+    color: '#62665f',
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  imageSourceRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  sectionCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#c9d5ce',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14,
+  },
+  sectionHeader: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1f2623',
+    marginBottom: 8,
+  },
+  capturedImageBanner: {
+    backgroundColor: '#fff7e0',
+    borderWidth: 1,
+    borderColor: '#d8c67a',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
   createDeckInput: {
     flex: 1,
     minWidth: 0,
@@ -1488,9 +2333,9 @@ const styles = StyleSheet.create({
     color: '#1f2623',
   },
   textArea: {
-    minHeight: 104,
+    minHeight: 64,
     textAlignVertical: 'top',
-    marginBottom: 14,
+    marginBottom: 8,
   },
   guessArea: {
     minHeight: 132,
@@ -1639,6 +2484,30 @@ const styles = StyleSheet.create({
     lineHeight: 31,
     color: '#1e2522',
     marginBottom: 4,
+  },
+  studyImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: 8,
+    backgroundColor: '#eef0ea',
+    marginBottom: 8,
+  },
+  sideImagePreview: {
+    width: '100%',
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: '#eef0ea',
+    marginBottom: 8,
+  },
+  linkButton: {
+    paddingVertical: 6,
+    marginBottom: 10,
+  },
+  linkButtonText: {
+    color: '#4d685f',
+    fontSize: 14,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   divider: {
     height: 1,

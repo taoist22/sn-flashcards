@@ -7,6 +7,8 @@ export type Deck = {
   updatedAt: string;
 };
 
+export type CardSideMode = 'text' | 'image';
+
 export type Flashcard = {
   id: string;
   deckId: string;
@@ -14,6 +16,16 @@ export type Flashcard = {
   externalUpdatedAt?: string;
   question: string;
   answer: string;
+  questionMode?: CardSideMode;
+  answerMode?: CardSideMode;
+  questionImagePath?: string;
+  answerImagePath?: string;
+  contextImageSide?: 'front' | 'answer';
+  contextImagePath?: string;
+  hint?: string;
+  hintMode?: CardSideMode;
+  hintImagePath?: string;
+  includeInAnki?: boolean;
   createdAt: string;
   updatedAt: string;
   sourceNotePath?: string;
@@ -38,12 +50,18 @@ export type NoteDeckDefault = {
   updatedAt: string;
 };
 
+export type FlashcardSettings = {
+  defaultCaptureMode?: CardSideMode;
+  imageAttachMode?: 'context' | 'replace';
+};
+
 export type FlashcardDatabase = {
   version: 1;
   decks: Deck[];
   cards: Flashcard[];
   reviews: ReviewEntry[];
   noteDefaults: NoteDeckDefault[];
+  settings?: FlashcardSettings;
 };
 
 export type SerializedFSRSCard = Omit<FSRSCard, 'due' | 'last_review'> & {
@@ -55,6 +73,16 @@ export type AddCardInput = {
   deckId: string;
   question: string;
   answer: string;
+  questionMode?: CardSideMode;
+  answerMode?: CardSideMode;
+  questionImagePath?: string;
+  answerImagePath?: string;
+  contextImageSide?: 'front' | 'answer';
+  contextImagePath?: string;
+  hint?: string;
+  hintMode?: CardSideMode;
+  hintImagePath?: string;
+  includeInAnki?: boolean;
   externalId?: string;
   externalUpdatedAt?: string;
   sourceNotePath?: string;
@@ -80,6 +108,16 @@ export type UpdateCardInput = {
   question: string;
   answer: string;
   deckId: string;
+  questionMode?: CardSideMode;
+  answerMode?: CardSideMode;
+  questionImagePath?: string;
+  answerImagePath?: string;
+  contextImageSide?: 'front' | 'answer';
+  contextImagePath?: string;
+  hint?: string;
+  hintMode?: CardSideMode;
+  hintImagePath?: string;
+  includeInAnki?: boolean;
 };
 
 export type StudyResult = {

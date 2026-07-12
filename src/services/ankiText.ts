@@ -235,7 +235,9 @@ export const buildAnkiPlainTextExport = (
   deck: Deck,
   cards: Flashcard[],
 ) => {
-  const rows = cards.map(card => {
+  const rows = cards
+    .filter(card => card.includeInAnki !== false && card.question.trim() && card.answer.trim())
+    .map(card => {
     const externalId =
       card.externalId || fingerprintCard(deck.name, card.question, card.answer);
     return [

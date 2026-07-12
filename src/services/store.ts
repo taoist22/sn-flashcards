@@ -22,6 +22,25 @@ const newId = (prefix: string) =>
 
 const normalizeName = (value: string) => value.trim().toLocaleLowerCase();
 
+// Defaults a card to excluded from Anki export the moment any side carries
+// image content, since there's nothing text-safe to represent it with. Only
+// applied when the caller hasn't explicitly set includeInAnki themselves.
+export const resolveIncludeInAnki = (input: {
+  includeInAnki?: boolean;
+  questionMode?: 'text' | 'image';
+  answerMode?: 'text' | 'image';
+  contextImageSide?: 'front' | 'answer';
+}): boolean => {
+  if (typeof input.includeInAnki === 'boolean') {
+    return input.includeInAnki;
+  }
+  const hasImageContent =
+    input.questionMode === 'image' ||
+    input.answerMode === 'image' ||
+    Boolean(input.contextImageSide);
+  return !hasImageContent;
+};
+
 const normalizeNoteDefaults = (
   noteDefaults: unknown,
   decks: Deck[],
@@ -109,7 +128,32 @@ const normalizeDb = (db: Partial<FlashcardDatabase>): FlashcardDatabase => {
     cards: Array.isArray(db.cards) ? db.cards : [],
     reviews: Array.isArray(db.reviews) ? db.reviews : [],
     noteDefaults: normalizeNoteDefaults(db.noteDefaults, db.decks),
+    settings: typeof db.settings === 'object' && db.settings !== null ? db.settings : undefined,
   };
+};
+
+export const setDefaultCaptureMode = async (
+  db: FlashcardDatabase,
+  mode: 'text' | 'image',
+): Promise<FlashcardDatabase> => {
+  const next = {
+    ...db,
+    settings: {...db.settings, defaultCaptureMode: mode},
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+export const setImageAttachMode = async (
+  db: FlashcardDatabase,
+  mode: 'context' | 'replace',
+): Promise<FlashcardDatabase> => {
+  const next = {
+    ...db,
+    settings: {...db.settings, imageAttachMode: mode},
+  };
+  await saveDatabase(next);
+  return next;
 };
 
 export const loadDatabase = async (): Promise<FlashcardDatabase> => {
@@ -227,6 +271,16 @@ export const addCard = async (
     externalUpdatedAt: input.externalUpdatedAt,
     question: input.question.trim(),
     answer: input.answer.trim(),
+    questionMode: input.questionMode,
+    answerMode: input.answerMode,
+    questionImagePath: input.questionImagePath,
+    answerImagePath: input.answerImagePath,
+    contextImageSide: input.contextImageSide,
+    contextImagePath: input.contextImagePath,
+    hint: input.hint,
+    hintMode: input.hintMode,
+    hintImagePath: input.hintImagePath,
+    includeInAnki: resolveIncludeInAnki(input),
     sourceNotePath: input.sourceNotePath,
     sourcePage: input.sourcePage,
     createdAt: now,
@@ -338,6 +392,16 @@ export const updateCard = async (
             deckId: input.deckId,
             question: input.question.trim(),
             answer: input.answer.trim(),
+            questionMode: input.questionMode,
+            answerMode: input.answerMode,
+            questionImagePath: input.questionImagePath,
+            answerImagePath: input.answerImagePath,
+            contextImageSide: input.contextImageSide,
+            contextImagePath: input.contextImagePath,
+            hint: input.hint,
+            hintMode: input.hintMode,
+            hintImagePath: input.hintImagePath,
+            includeInAnki: resolveIncludeInAnki(input),
             updatedAt: nowIso(),
           }
         : card,
