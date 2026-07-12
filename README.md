@@ -8,6 +8,44 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 
 > **Beta notice:** This plugin is built for Supernote's beta plugin system and beta development OS. Keep backups of important decks, expect occasional rough edges, and test new workflows with a small deck before relying on them heavily.
 
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Creating Decks](#creating-decks)
+  - [From the Decks Screen](#from-the-decks-screen)
+  - [While Adding a Flashcard](#while-adding-a-flashcard)
+- [Note Links and Default Decks](#note-links-and-default-decks)
+  - [Link a Note to a Deck](#link-a-note-to-a-deck)
+  - [Add a Keyword Without Linking](#add-a-keyword-without-linking)
+  - [Change or Remove a Note Link](#change-or-remove-a-note-link)
+- [Creating Flashcards](#creating-flashcards)
+  - [Manual Cards](#manual-cards)
+  - [Handwritten Cards With Lasso OCR](#handwritten-cards-with-lasso-ocr)
+  - [Keeping a Side as Handwriting Instead of Text](#keeping-a-side-as-handwriting-instead-of-text)
+  - [Capturing Handwriting by Default](#capturing-handwriting-by-default)
+- [Context Images and Hints](#context-images-and-hints)
+  - [Adding an Image](#adding-an-image)
+  - [Replacing Content Instead of Adding to It](#replacing-content-instead-of-adding-to-it)
+  - [Managing Context Images and Hints](#managing-context-images-and-hints)
+- [Studying Cards](#studying-cards)
+- [Editing Cards](#editing-cards)
+  - [Editing a Handwritten Side](#editing-a-handwritten-side)
+  - [Include in Anki Export](#include-in-anki-export)
+- [Anki Import](#anki-import)
+  - [Export From Anki Desktop](#export-from-anki-desktop)
+  - [Put the File on Supernote](#put-the-file-on-supernote)
+  - [Import Into Flashcards](#import-into-flashcards)
+- [Anki Export](#anki-export)
+  - [Handwriting, Images, and Anki](#handwriting-images-and-anki)
+- [Current Limitations](#current-limitations)
+- [Building From Source](#building-from-source)
+  - [Prerequisites](#prerequisites)
+  - [Build](#build)
+- [Development Notes](#development-notes)
+- [License](#license)
+
+
 ## Features
 
 - Create, select, and delete decks from the deck list
