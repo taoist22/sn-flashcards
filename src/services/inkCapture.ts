@@ -1,5 +1,10 @@
 import {FileUtils, PluginCommAPI, RattaFileSelector} from 'sn-plugin-lib';
 import type {LassoElement} from './lassoOcr';
+import {
+  ensureFileDeletePermission,
+  requireFileReadPermission,
+  requireFileWritePermission,
+} from './pluginPermissions';
 
 // Small margin around a tight ink bounding box so strokes aren't cropped flush
 // against the image edge.
@@ -11,6 +16,7 @@ const newImageToken = () =>
   `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 export const getCardImagesDir = async (): Promise<string> => {
+  await requireFileWritePermission();
   const exportPath = await FileUtils.getExportPath();
   const dir = `${exportPath}/sn-flashcards/card-images`;
   await FileUtils.makeDir(dir);
@@ -72,7 +78,46 @@ export const renderElementsToImage = async (
   }
 
   try {
-    await PluginCommAPI.lassoElements(rect);
+    const sizeResponse = (await PluginCommAPI.getPageDisplaySize()) as
+      | {success?: boolean; result?: {width?: number; height?: number}}
+      | {width?: number; height?: number}
+      | null
+      | undefined;
+    const size =
+      'result' in (sizeResponse ?? {})
+        ? (sizeResponse as {result?: {width?: number; height?: number}}).result
+        : (sizeResponse as {width?: number; height?: number} | null | undefined);
+    if (
+      typeof size?.width !== 'number' ||
+      typeof size?.height !== 'number' ||
+      size.width <= 1 ||
+      size.height <= 1
+    ) {
+      return false;
+    }
+
+    // New preview firmware rejects any lasso rectangle extending beyond the
+    // displayed page. Padding is therefore clipped to the valid page bounds.
+    const boundedRect = {
+      left: Math.max(0, Math.min(rect.left, size.width - 1)),
+      top: Math.max(0, Math.min(rect.top, size.height - 1)),
+      right: Math.max(1, Math.min(rect.right, size.width)),
+      bottom: Math.max(1, Math.min(rect.bottom, size.height)),
+    };
+    if (
+      boundedRect.right <= boundedRect.left ||
+      boundedRect.bottom <= boundedRect.top
+    ) {
+      return false;
+    }
+
+    const lassoResponse = (await PluginCommAPI.lassoElements(boundedRect)) as
+      | {success?: boolean; result?: boolean}
+      | null
+      | undefined;
+    if (!lassoResponse?.success || lassoResponse.result === false) {
+      return false;
+    }
     const response = (await PluginCommAPI.generateLassoPreview(destPath)) as
       | {success?: boolean}
       | null
@@ -114,6 +159,7 @@ export const captureCurrentLassoAsImage = async (destPath: string): Promise<bool
 };
 
 export const importContextImage = async (): Promise<string | null> => {
+  await requireFileReadPermission();
   const selected = (await RattaFileSelector.selectFile({
     selectType: 0,
     maxNum: 1,
@@ -141,6 +187,9 @@ export const deleteCardImage = async (path?: string): Promise<void> => {
     return;
   }
   try {
+    if (!(await ensureFileDeletePermission())) {
+      return;
+    }
     await FileUtils.deleteFile(path);
   } catch {
     // Best-effort cleanup only; a leftover file is not worth surfacing an error for.

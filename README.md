@@ -8,6 +8,8 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 
 > **Beta notice:** This plugin is built for Supernote's beta plugin system and beta development OS. Keep backups of important decks, expect occasional rough edges, and test new workflows with a small deck before relying on them heavily.
 
+> **Firmware requirement:** Version 0.3.1-beta requires Plugin Preview Build **Chauvet 3.29.43 Beta** on Manta/Nomad or **Chauvet 2.26.40 Beta** on A5 X/A6 X. Older plugin builds are not compatible with these preview firmware versions.
+
 ## Table of Contents
 
 - [Features](#features)
@@ -44,7 +46,6 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
   - [Build](#build)
 - [Development Notes](#development-notes)
 - [License](#license)
-
 
 ## Features
 

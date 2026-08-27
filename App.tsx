@@ -52,6 +52,10 @@ import {
   pickImportTextFile,
   readImportTextFile,
 } from './src/services/ankiText';
+import {
+  ensureFileReadPermission,
+  requireFileWritePermission,
+} from './src/services/pluginPermissions';
 
 const MAIN_BUTTON_ID = 100;
 const LASSO_BUTTON_ID = 200;
@@ -176,12 +180,15 @@ const getDefaultDeckIdForNote = async (
 };
 
 const getNativeKeywords = async (notePath: string) =>
-  unwrap<Array<{keyword?: string}>>(
-    await (PluginFileAPI as any).getKeyWords(notePath),
-    [],
-  );
+  (await ensureFileReadPermission())
+    ? unwrap<Array<{keyword?: string}>>(
+        await (PluginFileAPI as any).getKeyWords(notePath),
+        [],
+      )
+    : [];
 
 const addNativeKeyword = async (note: NoteContext, keyword: string) => {
+  await requireFileWritePermission();
   const normalized = keyword.trim();
   if (!normalized) {
     return;

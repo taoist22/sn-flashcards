@@ -10,6 +10,10 @@ import {
   writeTextFile,
 } from './nativeStorage';
 import {fingerprintCard} from './store';
+import {
+  requireFileReadPermission,
+  requireFileWritePermission,
+} from './pluginPermissions';
 
 const cleanCell = (value: string) =>
   value
@@ -270,6 +274,7 @@ export const exportDeckToAnkiText = async (
   deck: Deck,
   cards: Flashcard[],
 ) => {
+  await requireFileWritePermission();
   const exportPath = await FileUtils.getExportPath();
   const filePath = `${exportPath}/${safeFileName(deck.name)}-anki.txt`;
   await writeTextFile(filePath, buildAnkiPlainTextExport(deck, cards));
@@ -277,6 +282,7 @@ export const exportDeckToAnkiText = async (
 };
 
 export const pickImportTextFile = async () => {
+  await requireFileReadPermission();
   const selected = await RattaFileSelector.selectFile({
     selectType: 0,
     maxNum: 1,
@@ -304,6 +310,7 @@ export const pickImportTextFile = async () => {
 };
 
 export const getImportDropFolder = async () => {
+  await requireFileWritePermission();
   const exportPath = await FileUtils.getExportPath();
   const dropFolder = `${exportPath}/sn-flashcards`;
   await FileUtils.makeDir(dropFolder);
@@ -311,6 +318,7 @@ export const getImportDropFolder = async () => {
 };
 
 export const listImportDropFolderFiles = async () => {
+  await requireFileReadPermission();
   const dropFolder = await getImportDropFolder();
   const pluginDir = (await PluginManager.getPluginDirPath()) ?? '';
   const files = await listTextFilesInDirectories(
@@ -323,7 +331,10 @@ export const listImportDropFolderFiles = async () => {
   };
 };
 
-export const readImportTextFile = async (path: string) => ({
-  path,
-  text: (await readTextFile(path)) ?? '',
-});
+export const readImportTextFile = async (path: string) => {
+  await requireFileReadPermission();
+  return {
+    path,
+    text: (await readTextFile(path)) ?? '',
+  };
+};
