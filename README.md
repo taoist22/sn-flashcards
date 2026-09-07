@@ -8,12 +8,13 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 
 > **Beta notice:** This plugin is built for Supernote's beta plugin system and beta development OS. Keep backups of important decks, expect occasional rough edges, and test new workflows with a small deck before relying on them heavily.
 
-> **Firmware requirement:** Version 0.3.1-beta requires Plugin Preview Build **Chauvet 3.29.43 Beta** on Manta/Nomad or **Chauvet 2.26.40 Beta** on A5 X/A6 X. Older plugin builds are not compatible with these preview firmware versions.
+> **Firmware requirement:** Version 0.3.1-beta targets the permission-managed Plugin Preview Builds **Chauvet 3.29.44 Beta** on Manta/Nomad and **Chauvet 2.26.41 Beta** on A5 X/A6 X, matching the current DateTimeStamp compatibility baseline. Earlier builds are not supported.
 
 ## Table of Contents
 
 - [Features](#features)
 - [Installation](#installation)
+- [Permissions](#permissions)
 - [Creating Decks](#creating-decks)
   - [From the Decks Screen](#from-the-decks-screen)
   - [While Adding a Flashcard](#while-adding-a-flashcard)
@@ -75,6 +76,16 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 3. On the Supernote, open **Manage Plugins**.
 4. Add/install the plugin from `MyStyle`.
 5. Open a note and tap the plugin icon to launch **Flashcards**.
+
+## Permissions
+
+Flashcards uses `sn-plugin-lib` 0.1.65 and declares three file permissions. It asks for access when the corresponding feature needs it:
+
+- **Read** — read note keywords for deck suggestions and import card or image files. If denied, keyword suggestions are skipped and file imports are blocked.
+- **Write** — save handwriting images, export decks, create the import drop folder, and add note keywords.
+- **Delete** — remove saved images when they are replaced or deleted. If denied, unused image files may remain on the device.
+
+Handwritten card fronts, answers, and hints remain supported, including capture with text recognition disabled for Arabic and other scripts. Check capture previews before saving.
 
 ## Creating Decks
 
