@@ -53,6 +53,15 @@ export type NoteDeckDefault = {
 export type FlashcardSettings = {
   defaultCaptureMode?: CardSideMode;
   imageAttachMode?: 'context' | 'replace';
+  /**
+   * Handwritten guesses during study. The engine does NOT inherit the pen you use in the
+   * notebook app — a plugin gets device defaults and has to set its own — so these are
+   * stored rather than read from the system.
+   */
+  handwrittenGuess?: boolean;
+  guessPenType?: number;
+  guessPenWidth?: number;
+  guessPenColor?: number;
 };
 
 export type FlashcardDatabase = {

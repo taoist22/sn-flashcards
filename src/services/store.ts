@@ -156,6 +156,23 @@ export const setImageAttachMode = async (
   return next;
 };
 
+export const setGuessInkSettings = async (
+  db: FlashcardDatabase,
+  patch: {
+    handwrittenGuess?: boolean;
+    guessPenType?: number;
+    guessPenWidth?: number;
+    guessPenColor?: number;
+  },
+): Promise<FlashcardDatabase> => {
+  const next = {
+    ...db,
+    settings: {...db.settings, ...patch},
+  };
+  await saveDatabase(next);
+  return next;
+};
+
 export const loadDatabase = async (): Promise<FlashcardDatabase> => {
   const raw = await readDatabaseJson();
   if (!raw) {

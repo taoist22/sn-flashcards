@@ -21,6 +21,9 @@ class MainApplication : Application(), ReactApplication {
               // Packages that cannot be autolinked yet can be added manually here, for example:
               // add(MyReactNativePackage())
               add(FlashcardStoragePackage())
+              // Handwriting surface. Separate package so the shipped storage module is
+              // untouched; in-project packages are not autolinkable, hence the manual add.
+              add(InkSurfacePackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

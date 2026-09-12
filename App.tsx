@@ -32,7 +32,22 @@ import {
   setImageAttachMode,
   setNoteDefaultDeck,
   updateCard,
+  setGuessInkSettings,
 } from './src/services/store';
+import {InkSurfaceView} from './src/components/InkSurface';
+import {
+  activateInk,
+  clearInk,
+  deactivateInk,
+  freezeInk,
+  INK_DEFAULT_PEN_COLOR,
+  INK_DEFAULT_PEN_TYPE,
+  INK_DEFAULT_PEN_WIDTH,
+  INK_PEN_COLORS,
+  INK_PEN_TYPES,
+  INK_PEN_WIDTHS,
+  isInkAvailable,
+} from './src/services/inkSurface';
 import {createDraftFromLasso, type OcrFlashcardDraft} from './src/services/lassoOcr';
 import {
   buildSideImagePath,
@@ -221,6 +236,21 @@ function App(): React.JSX.Element {
   const [showAnswer, setShowAnswer] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [studyGuess, setStudyGuess] = useState('');
+
+  // Handwriting is optional and firmware-dependent: if getPWInterFace ever stops
+  // resolving, this stays false and the Guess field is the plain TextInput it always was.
+  const [inkAvailable, setInkAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    isInkAvailable().then(ok => {
+      if (!cancelled) {
+        setInkAvailable(ok);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [newDeckName, setNewDeckName] = useState('');
   const [captureDeckName, setCaptureDeckName] = useState('');
   const [linkDefaultOnApply, setLinkDefaultOnApply] = useState(false);
@@ -753,6 +783,12 @@ function App(): React.JSX.Element {
     }
   };
 
+  const guessInkOn =
+    inkAvailable && (db?.settings?.handwrittenGuess ?? true);
+  const guessPenType = db?.settings?.guessPenType ?? INK_DEFAULT_PEN_TYPE;
+  const guessPenWidth = db?.settings?.guessPenWidth ?? INK_DEFAULT_PEN_WIDTH;
+  const guessPenColor = db?.settings?.guessPenColor ?? INK_DEFAULT_PEN_COLOR;
+
   const rateStudyCard = async (rating: Grade) => {
     if (!activeStudyCard) {
       return;
@@ -762,6 +798,8 @@ function App(): React.JSX.Element {
     setShowAnswer(false);
     setShowHint(false);
     setStudyGuess('');
+    // The written guess is deliberately not kept — wipe it before the next card.
+    await clearInk();
   };
 
   if (!db || !selectedDeck) {
@@ -794,7 +832,9 @@ function App(): React.JSX.Element {
         </View>
       )}
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        scrollEnabled={!(screen === 'study' && guessInkOn)}>
         {noteContext && screen !== 'decks' && (
           <NoteLinkStatus
             deck={selectedDeck}
@@ -911,9 +951,50 @@ function App(): React.JSX.Element {
             showHint={showHint}
             guess={studyGuess}
             onGuessChange={setStudyGuess}
+            inkMode={guessInkOn}
+            penType={guessPenType}
+            penWidth={guessPenWidth}
+            penColor={guessPenColor}
+            onCyclePen={async () => {
+              if (!db) {
+                return;
+              }
+              const idx = INK_PEN_TYPES.findIndex(p => p.id === guessPenType);
+              const nextPen = INK_PEN_TYPES[(idx + 1) % INK_PEN_TYPES.length];
+              setDb(await setGuessInkSettings(db, {guessPenType: nextPen.id}));
+            }}
+            onCycleWidth={async () => {
+              if (!db) {
+                return;
+              }
+              const idx = INK_PEN_WIDTHS.indexOf(guessPenWidth);
+              const nextWidth = INK_PEN_WIDTHS[(idx + 1) % INK_PEN_WIDTHS.length];
+              setDb(await setGuessInkSettings(db, {guessPenWidth: nextWidth}));
+            }}
+            onCycleColor={async () => {
+              if (!db) {
+                return;
+              }
+              const idx = INK_PEN_COLORS.findIndex(c => c.value === guessPenColor);
+              const nextColor = INK_PEN_COLORS[(idx + 1) % INK_PEN_COLORS.length];
+              setDb(await setGuessInkSettings(db, {guessPenColor: nextColor.value}));
+            }}
+            onToggleInk={async () => {
+              if (!db) {
+                return;
+              }
+              const next = !(db.settings?.handwrittenGuess ?? true);
+              if (!next) {
+                await deactivateInk();
+              }
+              setDb(await setGuessInkSettings(db, {handwrittenGuess: next}));
+            }}
+            inkAvailable={inkAvailable}
             onRevealHint={() => setShowHint(true)}
             onReveal={() => {
-              setStudyGuess('');
+              // Freeze rather than release: the strokes must stay on screen next to the
+              // answer for comparison, they just must not accept new input.
+              freezeInk();
               setShowAnswer(true);
             }}
             onRate={rateStudyCard}
@@ -1863,6 +1944,15 @@ function StudyScreen({
   showHint,
   guess,
   onGuessChange,
+  inkMode,
+  inkAvailable,
+  penType,
+  penWidth,
+  penColor,
+  onCyclePen,
+  onCycleWidth,
+  onCycleColor,
+  onToggleInk,
   onRevealHint,
   onReveal,
   onRate,
@@ -1872,6 +1962,15 @@ function StudyScreen({
   showHint: boolean;
   guess: string;
   onGuessChange: (guess: string) => void;
+  inkMode: boolean;
+  inkAvailable: boolean;
+  penType: number;
+  penWidth: number;
+  penColor: number;
+  onCyclePen: () => void;
+  onCycleWidth: () => void;
+  onCycleColor: () => void;
+  onToggleInk: () => void;
   onRevealHint: () => void;
   onReveal: () => void;
   onRate: (rating: Grade) => void;
@@ -1881,12 +1980,56 @@ function StudyScreen({
   const [contextImageFailed, setContextImageFailed] = useState(false);
   const [hintImageFailed, setHintImageFailed] = useState(false);
 
+  const cardId = card?.id;
+
   useEffect(() => {
     setQuestionImageFailed(false);
     setAnswerImageFailed(false);
     setContextImageFailed(false);
     setHintImageFailed(false);
   }, [card?.id]);
+
+  /**
+   * Bind the engine once the surface has actually been laid out.
+   *
+   * The engine sizes its writing bitmap from the host's MEASURED dimensions, so activating
+   * before layout binds a 0x0 buffer. activateInk reports 'not-laid-out' rather than
+   * failing, and we retry on the next frames.
+   */
+  useEffect(() => {
+    if (!inkMode || !cardId) {
+      return;
+    }
+    let cancelled = false;
+    let attempts = 0;
+    const tryActivate = async () => {
+      if (cancelled) {
+        return;
+      }
+      const result = await activateInk(penType, penWidth, penColor);
+      if (result === 'not-laid-out' && attempts < 12 && !cancelled) {
+        attempts += 1;
+        setTimeout(tryActivate, 100);
+      }
+    };
+    tryActivate();
+    return () => {
+      cancelled = true;
+    };
+  }, [inkMode, cardId, penType, penWidth, penColor]);
+
+  /**
+   * Release on the way out of the study screen.
+   *
+   * Non-negotiable: an engine left enabled against a view React has unmounted wedges
+   * PluginHost, after which the plugin refuses to load at all until the device reboots.
+   */
+  useEffect(
+    () => () => {
+      deactivateInk();
+    },
+    [],
+  );
 
   if (!card) {
     return (
@@ -1907,59 +2050,119 @@ function StudyScreen({
       />
     ) : null;
 
+  const questionBlock = (
+    <>
+      <Text style={styles.label}>Question</Text>
+      {card.questionMode === 'image' && card.questionImagePath && !questionImageFailed ? (
+        <Image
+          source={{uri: `file://${card.questionImagePath}`}}
+          style={styles.studyImage}
+          resizeMode="contain"
+          onError={() => setQuestionImageFailed(true)}
+        />
+      ) : (
+        <Text style={styles.studyText}>{card.question}</Text>
+      )}
+      {card.contextImageSide === 'front' && contextImage}
+      {!showAnswer && (card.hint?.trim() || card.hintImagePath) && (
+        <>
+          <View style={styles.divider} />
+          {showHint ? (
+            <>
+              <Text style={styles.label}>Hint</Text>
+              {card.hintMode === 'image' && card.hintImagePath && !hintImageFailed ? (
+                <Image
+                  source={{uri: `file://${card.hintImagePath}`}}
+                  style={styles.studyImage}
+                  resizeMode="contain"
+                  onError={() => setHintImageFailed(true)}
+                />
+              ) : (
+                <Text style={styles.studyText}>{card.hint}</Text>
+              )}
+            </>
+          ) : (
+            <Pressable onPress={onRevealHint} style={styles.linkButton}>
+              <Text style={styles.linkButtonText}>Show Hint</Text>
+            </Pressable>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  const penLabel =
+    INK_PEN_TYPES.find(pen => pen.id === penType)?.label ?? 'Pen';
+  const colorLabel =
+    INK_PEN_COLORS.find(colour => colour.value === penColor)?.label ?? 'Black';
+
   return (
     <View>
       <View style={styles.studyCard}>
-        <Text style={styles.label}>Question</Text>
-        {card.questionMode === 'image' && card.questionImagePath && !questionImageFailed ? (
-          <Image
-            source={{uri: `file://${card.questionImagePath}`}}
-            style={styles.studyImage}
-            resizeMode="contain"
-            onError={() => setQuestionImageFailed(true)}
-          />
+        {/*
+          While the engine is live nothing above the ink surface may change height —
+          revealing a hint otherwise pushes the surface down, which makes the ink appear to
+          jump and reallocates the engine's writing bitmap mid-session. Capped and given
+          its own scroll instead.
+        */}
+        {inkMode ? (
+          <ScrollView style={styles.questionScroll} nestedScrollEnabled>
+            {questionBlock}
+          </ScrollView>
         ) : (
-          <Text style={styles.studyText}>{card.question}</Text>
+          questionBlock
         )}
-        {card.contextImageSide === 'front' && contextImage}
-        {!showAnswer && (card.hint?.trim() || card.hintImagePath) && (
-          <>
-            <View style={styles.divider} />
-            {showHint ? (
-              <>
-                <Text style={styles.label}>Hint</Text>
-                {card.hintMode === 'image' && card.hintImagePath && !hintImageFailed ? (
-                  <Image
-                    source={{uri: `file://${card.hintImagePath}`}}
-                    style={styles.studyImage}
-                    resizeMode="contain"
-                    onError={() => setHintImageFailed(true)}
-                  />
-                ) : (
-                  <Text style={styles.studyText}>{card.hint}</Text>
-                )}
-              </>
-            ) : (
-              <Pressable onPress={onRevealHint} style={styles.linkButton}>
-                <Text style={styles.linkButtonText}>Show Hint</Text>
+        {/*
+          The guess stays put when the answer appears: the answer renders BELOW it, so the
+          ink surface neither moves nor resizes and the two can be compared side by side.
+          Nothing is stored — the strokes live in the engine's buffer until the card is
+          rated, at which point clearInk wipes them.
+        */}
+        <View style={styles.divider} />
+        <View style={styles.guessHeader}>
+          <Text style={styles.label}>Guess</Text>
+          {inkAvailable && !showAnswer ? (
+            <View style={styles.penRow}>
+              {inkMode ? (
+                <>
+                  <Pressable onPress={onCyclePen} style={styles.penChip}>
+                    <Text style={styles.penChipText}>{penLabel}</Text>
+                  </Pressable>
+                  <Pressable onPress={onCycleWidth} style={styles.penChip}>
+                    <Text style={styles.penChipText}>{`${penWidth}`}</Text>
+                  </Pressable>
+                  <Pressable onPress={onCycleColor} style={styles.penChip}>
+                    <Text style={styles.penChipText}>{colorLabel}</Text>
+                  </Pressable>
+                </>
+              ) : null}
+              <Pressable onPress={onToggleInk} style={styles.penChip}>
+                <Text style={styles.penChipText}>
+                  {inkMode ? 'Type instead' : 'Write instead'}
+                </Text>
               </Pressable>
-            )}
-          </>
-        )}
-        {!showAnswer ? (
-          <>
-            <View style={styles.divider} />
-            <Text style={styles.label}>Guess</Text>
-            <TextInput
-              value={guess}
-              onChangeText={onGuessChange}
-              multiline
-              placeholder="Write or type your guess"
-              placeholderTextColor="#74746c"
-              style={[styles.input, styles.guessArea]}
-            />
-          </>
+            </View>
+          ) : null}
+        </View>
+
+        {inkMode ? (
+          <InkSurfaceView style={styles.inkSurface} />
+        ) : !showAnswer ? (
+          <TextInput
+            value={guess}
+            onChangeText={onGuessChange}
+            multiline
+            placeholder="Write or type your guess"
+            placeholderTextColor="#74746c"
+            style={[styles.input, styles.guessArea]}
+          />
+        ) : guess.trim() ? (
+          <Text style={styles.studyText}>{guess}</Text>
         ) : (
+          <Text style={styles.emptyText}>No guess recorded.</Text>
+        )}
+
+        {showAnswer ? (
           <>
             <View style={styles.divider} />
             <Text style={styles.label}>Answer</Text>
@@ -1975,7 +2178,7 @@ function StudyScreen({
             )}
             {card.contextImageSide === 'answer' && contextImage}
           </>
-        )}
+        ) : null}
       </View>
 
       {!showAnswer ? (
@@ -2348,6 +2551,46 @@ const styles = StyleSheet.create({
     minHeight: 132,
     textAlignVertical: 'top',
     marginTop: 2,
+  },
+  // Capped so a hint reveal scrolls inside this box instead of pushing the ink surface
+  // down — the engine must not see its host move or resize.
+  questionScroll: {
+    maxHeight: 280,
+  },
+  guessHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+  },
+  penRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 6,
+  },
+  penChip: {
+    borderColor: '#9aa39c',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginLeft: 6,
+    marginBottom: 4,
+  },
+  penChipText: {
+    fontSize: 13,
+    color: '#1f2623',
+  },
+  // FIXED height, never flex: the engine sizes its writing bitmap from the host's measured
+  // dimensions and must not be resized after binding.
+  inkSurface: {
+    height: 300,
+    backgroundColor: '#ffffff',
+    borderColor: '#9aa39c',
+    borderWidth: 1,
+    borderRadius: 8,
+    marginTop: 2,
+    marginBottom: 4,
   },
   label: {
     fontSize: 14,
