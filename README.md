@@ -32,6 +32,7 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
   - [Replacing Content Instead of Adding to It](#replacing-content-instead-of-adding-to-it)
   - [Managing Context Images and Hints](#managing-context-images-and-hints)
 - [Studying Cards](#studying-cards)
+  - [Handwriting Your Guess](#handwriting-your-guess)
 - [Editing Cards](#editing-cards)
   - [Editing a Handwritten Side](#editing-a-handwritten-side)
   - [Include in Anki Export](#include-in-anki-export)
@@ -61,7 +62,7 @@ Flashcards is a beta spaced-repetition flashcard plugin for Supernote Nomad and 
 - Add a context image to a card, sourced from an imported file or lassoed straight from a note
 - Add an optional hint, revealed on request during study, as text or an image
 - Move cards from one deck to another
-- Review cards with a temporary editable guess box
+- Write your guess by hand during study, in real ink drawn by the Supernote's own pen engine, with the answer revealed beneath it for comparison
 - Schedule reviews with FSRS
 - View basic deck stats
 - Choose per-card whether an image-based card is included in Anki export
@@ -233,15 +234,36 @@ In the Add Image section, once a context image is attached, you can switch which
 2. Tap **Study Due** or **Study**.
 3. Read the question.
 4. If the card has a hint, tap **Show Hint** to reveal it before guessing.
-5. Use the editable **Guess** box to type or handwrite your answer.
-6. Tap **Show Answer**.
+5. Write your guess in the **Your Guess** area with your pen.
+6. Tap **Show Answer**. Your handwriting stays on screen and the answer appears
+   below it, so you can compare the two.
 7. Rate your recall:
    - **Again**
    - **Hard**
    - **Good**
    - **Easy**
 
-The guess is temporary. It is cleared when you reveal the answer or move to the next card, and it is never saved.
+The guess is temporary. It is wiped when you rate the card, and it is never saved.
+
+### Handwriting Your Guess
+
+The guess area is real ink, drawn by the same pen engine the Supernote uses for
+notes, so it responds like writing in a notebook rather than like a drawing app.
+
+Controls sit on the row directly above the writing area, and the grey line below
+them marks where the writable area starts:
+
+- **Show Answer** — placed at the end of the row away from your writing hand, so
+  a resting palm does not trigger it
+- **Fine / Thin / Medium / Thick / Bold** — pen width, remembered between sessions
+- **Type instead** — switch back to the keyboard and handwriting-recognition
+  input; **Write instead** switches back
+- **Right-handed / Left-handed** — moves **Show Answer** to the other side
+
+Only the pen draws. Your palm and fingers will not mark the page.
+
+If your device's firmware does not support the pen engine, the handwriting area
+simply does not appear and the Guess box behaves as a normal text field.
 
 ## Editing Cards
 
@@ -338,6 +360,8 @@ If you flip a card back to included despite having image content, its recognized
 - No FSRS scheduling sync with Anki
 - Large decks may be slow because the plugin currently stores cards in a JSON database
 - Handwriting kept as an image is a flat picture, not editable ink — there is no way to touch up individual strokes; use **Replace Handwriting** to redo it from fresh lasso input instead
+- Handwritten guesses are not saved — they exist only for the comparison, and are gone once you rate the card
+- The handwritten guess uses a single ballpoint pen in black. The pen styles the firmware exposes are visually identical on the plugin's writing surface, and grey shades render as black there, so only the width is adjustable
 - Image-based cards are excluded from Anki export by default, and even when included, an image side exports as its recognized-text fallback (or blank) rather than the image itself — hints and context images never export at all
 
 Recommended deck size for this beta is under about 1,000 simple text cards. Larger decks may work, but should be tested carefully.
