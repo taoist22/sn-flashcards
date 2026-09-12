@@ -147,6 +147,23 @@ class InkSurfaceModule(private val reactContext: ReactApplicationContext) :
             val on = runCatching {
                 e.javaClass.getMethod("setPWEnabled", java.lang.Boolean.TYPE).invoke(e, true)
             }
+
+            // Clear AFTER binding, not when the previous card was rated.
+            //
+            // clearContentX empties the engine's stroke model, but the ink is already
+            // rasterised into the host — and the disable/re-enable cycle between cards
+            // brought the old strokes back on screen. Clearing here is the only point that
+            // is guaranteed to be after everything which could restore them. Then force a
+            // repaint, because emptying the model does not by itself repaint the host.
+            runCatching {
+                e.javaClass.getMethod("clearContentX", java.lang.Boolean.TYPE).invoke(e, true)
+            }.onFailure { android.util.Log.w("InkSurface", "clear on bind: ${it.cause ?: it}") }
+            runCatching {
+                e.javaClass.getMethod("invalidateHost", android.graphics.Rect::class.java)
+                    .invoke(e, android.graphics.Rect(0, 0, host.width, host.height))
+            }
+            host.invalidate()
+
             // setPWEnabled returns void, so invoke() gives null on success — success is
             // "did not throw", never "returned non-null".
             promise.resolve(if (on.isSuccess) "active" else "enable-failed")
@@ -182,6 +199,14 @@ class InkSurfaceModule(private val reactContext: ReactApplicationContext) :
             }
             runCatching {
                 e.javaClass.getMethod("disablePWInput", java.lang.Boolean.TYPE).invoke(e, false)
+            }
+            // Emptying the model does not repaint the host on its own.
+            InkSurfaceViewManager.current?.let { host ->
+                runCatching {
+                    e.javaClass.getMethod("invalidateHost", android.graphics.Rect::class.java)
+                        .invoke(e, android.graphics.Rect(0, 0, host.width, host.height))
+                }
+                host.invalidate()
             }
             promise.resolve(if (r.isSuccess) "cleared" else "clear-failed")
         }
