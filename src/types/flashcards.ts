@@ -59,9 +59,11 @@ export type FlashcardSettings = {
    * stored rather than read from the system.
    */
   handwrittenGuess?: boolean;
-  guessPenType?: number;
+  /**
+   * Width only. Pen type and colour are fixed: the PENTYPE_* values render
+   * indistinguishably on this panel, and only black renders for a stroke pen.
+   */
   guessPenWidth?: number;
-  guessPenColor?: number;
   /** Which side the Show Answer button sits on, so it is away from the writing hand. */
   guessHand?: 'left' | 'right';
 };

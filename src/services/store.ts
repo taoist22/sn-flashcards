@@ -160,9 +160,7 @@ export const setGuessInkSettings = async (
   db: FlashcardDatabase,
   patch: {
     handwrittenGuess?: boolean;
-    guessPenType?: number;
     guessPenWidth?: number;
-    guessPenColor?: number;
     guessHand?: 'left' | 'right';
   },
 ): Promise<FlashcardDatabase> => {

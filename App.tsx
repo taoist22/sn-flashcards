@@ -40,11 +40,7 @@ import {
   clearInk,
   deactivateInk,
   freezeInk,
-  INK_DEFAULT_PEN_COLOR,
-  INK_DEFAULT_PEN_TYPE,
   INK_DEFAULT_PEN_WIDTH,
-  INK_PEN_COLORS,
-  INK_PEN_TYPES,
   INK_PEN_WIDTHS,
   isInkAvailable,
 } from './src/services/inkSurface';
@@ -785,9 +781,7 @@ function App(): React.JSX.Element {
 
   const guessInkOn =
     inkAvailable && (db?.settings?.handwrittenGuess ?? true);
-  const guessPenType = db?.settings?.guessPenType ?? INK_DEFAULT_PEN_TYPE;
   const guessPenWidth = db?.settings?.guessPenWidth ?? INK_DEFAULT_PEN_WIDTH;
-  const guessPenColor = db?.settings?.guessPenColor ?? INK_DEFAULT_PEN_COLOR;
   const guessHand = db?.settings?.guessHand ?? 'right';
 
   const rateStudyCard = async (rating: Grade) => {
@@ -956,9 +950,7 @@ function App(): React.JSX.Element {
             guess={studyGuess}
             onGuessChange={setStudyGuess}
             inkMode={guessInkOn}
-            penType={guessPenType}
             penWidth={guessPenWidth}
-            penColor={guessPenColor}
             hand={guessHand}
             onToggleHand={async () => {
               if (!db) {
@@ -970,29 +962,13 @@ function App(): React.JSX.Element {
                 }),
               );
             }}
-            onCyclePen={async () => {
-              if (!db) {
-                return;
-              }
-              const idx = INK_PEN_TYPES.findIndex(p => p.id === guessPenType);
-              const nextPen = INK_PEN_TYPES[(idx + 1) % INK_PEN_TYPES.length];
-              setDb(await setGuessInkSettings(db, {guessPenType: nextPen.id}));
-            }}
             onCycleWidth={async () => {
               if (!db) {
                 return;
               }
-              const idx = INK_PEN_WIDTHS.indexOf(guessPenWidth);
-              const nextWidth = INK_PEN_WIDTHS[(idx + 1) % INK_PEN_WIDTHS.length];
-              setDb(await setGuessInkSettings(db, {guessPenWidth: nextWidth}));
-            }}
-            onCycleColor={async () => {
-              if (!db) {
-                return;
-              }
-              const idx = INK_PEN_COLORS.findIndex(c => c.value === guessPenColor);
-              const nextColor = INK_PEN_COLORS[(idx + 1) % INK_PEN_COLORS.length];
-              setDb(await setGuessInkSettings(db, {guessPenColor: nextColor.value}));
+              const idx = INK_PEN_WIDTHS.findIndex(w => w.value === guessPenWidth);
+              const next = INK_PEN_WIDTHS[(idx + 1) % INK_PEN_WIDTHS.length];
+              setDb(await setGuessInkSettings(db, {guessPenWidth: next.value}));
             }}
             onToggleInk={async () => {
               if (!db) {
@@ -1961,14 +1937,10 @@ function StudyScreen({
   onGuessChange,
   inkMode,
   inkAvailable,
-  penType,
   penWidth,
-  penColor,
   hand,
   onToggleHand,
-  onCyclePen,
   onCycleWidth,
-  onCycleColor,
   onToggleInk,
   onRevealHint,
   onReveal,
@@ -1981,14 +1953,10 @@ function StudyScreen({
   onGuessChange: (guess: string) => void;
   inkMode: boolean;
   inkAvailable: boolean;
-  penType: number;
   penWidth: number;
-  penColor: number;
   hand: 'left' | 'right';
   onToggleHand: () => void;
-  onCyclePen: () => void;
   onCycleWidth: () => void;
-  onCycleColor: () => void;
   onToggleInk: () => void;
   onRevealHint: () => void;
   onReveal: () => void;
@@ -2029,7 +1997,7 @@ function StudyScreen({
         // Full release first: re-binding a reused instance kept a stale writable region.
         await deactivateInk();
       }
-      const result = await activateInk(penType, penWidth, penColor);
+      const result = await activateInk(penWidth);
       if (result === 'not-laid-out' && attempts < 12 && !cancelled) {
         attempts += 1;
         setTimeout(tryActivate, 100);
@@ -2039,7 +2007,7 @@ function StudyScreen({
     return () => {
       cancelled = true;
     };
-  }, [inkMode, cardId, penType, penWidth, penColor]);
+  }, [inkMode, cardId, penWidth]);
 
   /**
    * Release on the way out of the study screen.
@@ -2114,10 +2082,8 @@ function StudyScreen({
     </>
   );
 
-  const penLabel =
-    INK_PEN_TYPES.find(pen => pen.id === penType)?.label ?? 'Pen';
-  const colorLabel =
-    INK_PEN_COLORS.find(colour => colour.value === penColor)?.label ?? 'Black';
+  const widthLabel =
+    INK_PEN_WIDTHS.find(w => w.value === penWidth)?.label ?? 'Medium';
 
   return (
     <View>
@@ -2166,17 +2132,9 @@ function StudyScreen({
             )}
             <View style={styles.penRow}>
               {inkMode ? (
-                <>
-                  <Pressable onPress={onCyclePen} style={styles.penChip}>
-                    <Text style={styles.penChipText}>{penLabel}</Text>
-                  </Pressable>
-                  <Pressable onPress={onCycleWidth} style={styles.penChip}>
-                    <Text style={styles.penChipText}>{`${penWidth}`}</Text>
-                  </Pressable>
-                  <Pressable onPress={onCycleColor} style={styles.penChip}>
-                    <Text style={styles.penChipText}>{colorLabel}</Text>
-                  </Pressable>
-                </>
+                <Pressable onPress={onCycleWidth} style={styles.penChip}>
+                  <Text style={styles.penChipText}>{widthLabel}</Text>
+                </Pressable>
               ) : null}
               <Pressable onPress={onToggleInk} style={styles.penChip}>
                 <Text style={styles.penChipText}>

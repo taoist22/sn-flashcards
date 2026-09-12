@@ -21,32 +21,40 @@ type InkSurfaceNative = {
 
 const native: InkSurfaceNative | undefined = NativeModules.InkSurface;
 
-/** EinkPWInterface PENTYPE_* — the ones that render as a writing pen. */
-export const INK_PEN_TYPES: ReadonlyArray<{id: number; label: string}> = [
-  {id: 2, label: 'Pen'},
-  {id: 3, label: 'Pen 2'},
-  {id: 1, label: 'Pencil'},
-  {id: 7, label: 'Ballpoint'},
-  {id: 4, label: 'Brush'},
-  {id: 12, label: 'Calligraphy'},
-];
+/**
+ * One pen, fixed.
+ *
+ * Measured on-device: the PENTYPE_* values are visually indistinguishable on this panel,
+ * so a picker for them was a control that did nothing. BALLPEN is pressure-uniform by
+ * nature, which suits a short legible guess better than an expressive stroke.
+ */
+export const INK_PEN_TYPE = 7;
 
 /**
- * The engine's own default is 4.4, which draws about 4px on an 1875px panel — too thin.
- * 10 reads as a normal pen; 16 is heavy.
+ * Black, fixed.
+ *
+ * The other PENCOLOR_* greys do not render for a stroke pen — most likely because the fast
+ * e-ink waveform used for live ink is effectively 1-bit, so mid-greys collapse to black.
+ * (MARK escapes this only because it stamps pre-rendered bitmaps carrying their own shade.)
  */
-export const INK_PEN_WIDTHS: ReadonlyArray<number> = [4.4, 8, 10, 13, 16];
+export const INK_PEN_COLOR = -16777216;
 
-/** PENCOLOR_* — the greys the panel can actually render. */
-export const INK_PEN_COLORS: ReadonlyArray<{label: string; value: number}> = [
-  {label: 'Black', value: -16777216},
-  {label: 'Dark grey', value: -12566464},
-  {label: 'Grey', value: -8355712},
+/**
+ * Widths, labelled rather than raw.
+ *
+ * The engine's own default of 4.4 draws about 4px on an 1875px panel and is too thin to
+ * write with; 10 reads as a normal pen and 16 is heavy. A bare "10" on a chip means
+ * nothing to a user, so the values are named.
+ */
+export const INK_PEN_WIDTHS: ReadonlyArray<{label: string; value: number}> = [
+  {label: 'Fine', value: 6},
+  {label: 'Thin', value: 8},
+  {label: 'Medium', value: 10},
+  {label: 'Thick', value: 12},
+  {label: 'Bold', value: 14},
 ];
 
-export const INK_DEFAULT_PEN_TYPE = 2;
 export const INK_DEFAULT_PEN_WIDTH = 10;
-export const INK_DEFAULT_PEN_COLOR = -16777216;
 
 /**
  * Whether this device can do handwriting at all.
@@ -72,16 +80,12 @@ export const isInkAvailable = async (): Promise<boolean> => {
  * writing bitmap from the host's measured dimensions, so the caller retries on the next
  * frame rather than binding to a 0x0 buffer.
  */
-export const activateInk = async (
-  penType: number,
-  penWidth: number,
-  penColor: number,
-): Promise<string> => {
+export const activateInk = async (penWidth: number): Promise<string> => {
   if (!native) {
     return 'unavailable';
   }
   try {
-    return await native.activate(penType, penWidth, penColor);
+    return await native.activate(INK_PEN_TYPE, penWidth, INK_PEN_COLOR);
   } catch {
     return 'error';
   }
