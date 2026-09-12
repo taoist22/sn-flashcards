@@ -2144,9 +2144,26 @@ function StudyScreen({
           rated, at which point clearInk wipes them.
         */}
         <View style={styles.studySection}>
-        <View style={styles.guessHeader}>
-          <Text style={styles.sectionHeading}>YOUR GUESS</Text>
-          {inkAvailable && !showAnswer ? (
+        <Text style={styles.sectionHeading}>YOUR GUESS</Text>
+        {/*
+          Everything the user can tap lives on ONE row above the writing area, and the grey
+          rule below it is the top edge of what is writable. Show Answer sits at the end of
+          that row opposite the writing hand — full width beneath the surface, a resting
+          palm kept triggering it.
+        */}
+        {inkAvailable && !showAnswer ? (
+          <View
+            style={[
+              styles.guessControls,
+              hand === 'left' ? styles.guessControlsFlip : null,
+            ]}>
+            {inkMode ? (
+              <Pressable onPress={onReveal} style={styles.revealButton}>
+                <Text style={styles.revealButtonText}>Show Answer</Text>
+              </Pressable>
+            ) : (
+              <View />
+            )}
             <View style={styles.penRow}>
               {inkMode ? (
                 <>
@@ -2172,24 +2189,10 @@ function StudyScreen({
                 </Text>
               </Pressable>
             </View>
-          ) : null}
-        </View>
-
-        {/*
-          Show Answer sits ABOVE the writing area and hard against the edge opposite the
-          writing hand. Full width below the surface, a resting palm triggered it.
-        */}
-        {inkMode && !showAnswer ? (
-          <View
-            style={[
-              styles.revealRow,
-              hand === 'right' ? styles.revealLeft : styles.revealRight,
-            ]}>
-            <Pressable onPress={onReveal} style={styles.revealButton}>
-              <Text style={styles.revealButtonText}>Show Answer</Text>
-            </Pressable>
           </View>
         ) : null}
+
+        {inkMode ? <View style={styles.inkBoundary} /> : null}
 
         {inkMode ? (
           <InkSurfaceView style={styles.inkSurface} />
@@ -2618,12 +2621,23 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginBottom: 6,
   },
-  revealRow: {
+  guessControls: {
     flexDirection: 'row',
-    marginBottom: 4,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    marginBottom: 6,
   },
-  revealLeft: {justifyContent: 'flex-start'},
-  revealRight: {justifyContent: 'flex-end'},
+  // Left-handers get Show Answer on the right instead, away from the writing hand.
+  guessControlsFlip: {
+    flexDirection: 'row-reverse',
+  },
+  // The top edge of the writable area, made explicit so it is not guessed at.
+  inkBoundary: {
+    height: 2,
+    backgroundColor: '#9aa39c',
+    marginBottom: 0,
+  },
   revealButton: {
     backgroundColor: '#263832',
     borderRadius: 6,
@@ -2655,8 +2669,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderColor: '#9aa39c',
     borderWidth: 1,
-    borderRadius: 8,
-    marginTop: 2,
+    // No top border and no top margin: the boundary rule above IS the top edge, and a
+    // second line there would just look like a gap the user cannot write in.
+    borderTopWidth: 0,
+    marginTop: 0,
     marginBottom: 4,
   },
   label: {
