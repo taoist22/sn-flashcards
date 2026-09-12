@@ -835,7 +835,10 @@ function App(): React.JSX.Element {
 
       <ScrollView
         contentContainerStyle={styles.content}
-        scrollEnabled={!(screen === 'study' && guessInkOn)}>
+        // Locked only while WRITING: the engine must not see its host move. Once the
+        // answer is showing the engine is frozen, so scrolling down to the answer and the
+        // rating buttons is safe — and necessary, since they sit below the surface.
+        scrollEnabled={!(screen === 'study' && guessInkOn && !showAnswer)}>
         {noteContext && screen !== 'decks' && (
           <NoteLinkStatus
             deck={selectedDeck}
@@ -2072,7 +2075,7 @@ function StudyScreen({
 
   const questionBlock = (
     <>
-      <Text style={styles.label}>Question</Text>
+      <Text style={styles.sectionHeading}>QUESTION</Text>
       {card.questionMode === 'image' && card.questionImagePath && !questionImageFailed ? (
         <Image
           source={{uri: `file://${card.questionImagePath}`}}
@@ -2125,22 +2128,24 @@ function StudyScreen({
           jump and reallocates the engine's writing bitmap mid-session. Capped and given
           its own scroll instead.
         */}
-        {inkMode ? (
-          <ScrollView style={styles.questionScroll} nestedScrollEnabled>
-            {questionBlock}
-          </ScrollView>
-        ) : (
-          questionBlock
-        )}
+        <View style={styles.studySection}>
+          {inkMode ? (
+            <ScrollView style={styles.questionScroll} nestedScrollEnabled>
+              {questionBlock}
+            </ScrollView>
+          ) : (
+            questionBlock
+          )}
+        </View>
         {/*
           The guess stays put when the answer appears: the answer renders BELOW it, so the
           ink surface neither moves nor resizes and the two can be compared side by side.
           Nothing is stored — the strokes live in the engine's buffer until the card is
           rated, at which point clearInk wipes them.
         */}
-        <View style={styles.divider} />
+        <View style={styles.studySection}>
         <View style={styles.guessHeader}>
-          <Text style={styles.label}>Guess</Text>
+          <Text style={styles.sectionHeading}>YOUR GUESS</Text>
           {inkAvailable && !showAnswer ? (
             <View style={styles.penRow}>
               {inkMode ? (
@@ -2202,11 +2207,11 @@ function StudyScreen({
         ) : (
           <Text style={styles.emptyText}>No guess recorded.</Text>
         )}
+        </View>
 
         {showAnswer ? (
-          <>
-            <View style={styles.divider} />
-            <Text style={styles.label}>Answer</Text>
+          <View style={styles.studySection}>
+            <Text style={styles.sectionHeading}>ANSWER</Text>
             {card.answerMode === 'image' && card.answerImagePath && !answerImageFailed ? (
               <Image
                 source={{uri: `file://${card.answerImagePath}`}}
@@ -2218,7 +2223,7 @@ function StudyScreen({
               <Text style={styles.studyText}>{card.answer}</Text>
             )}
             {card.contextImageSide === 'answer' && contextImage}
-          </>
+          </View>
         ) : null}
       </View>
 
@@ -2600,7 +2605,7 @@ const styles = StyleSheet.create({
     // different Y on every card, and the engine's writable region is derived from the
     // host's position when it binds — which produced a dead band, then no writable area
     // at all on later cards.
-    height: 260,
+    height: 200,
   },
   guessHeader: {
     flexDirection: 'row',
@@ -2646,7 +2651,7 @@ const styles = StyleSheet.create({
   // FIXED height, never flex: the engine sizes its writing bitmap from the host's measured
   // dimensions and must not be resized after binding.
   inkSurface: {
-    height: 300,
+    height: 260,
     backgroundColor: '#ffffff',
     borderColor: '#9aa39c',
     borderWidth: 1,
@@ -2822,9 +2827,25 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   divider: {
-    height: 1,
-    backgroundColor: '#d7d7ce',
-    marginVertical: 16,
+    height: 2,
+    backgroundColor: '#1f2623',
+    marginVertical: 14,
+  },
+  // Each study section gets a real boundary. On a 16-grey panel a 1px light grey rule is
+  // effectively invisible, and Question/Guess/Answer ran together.
+  studySection: {
+    borderColor: '#1f2623',
+    borderWidth: 2,
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 10,
+  },
+  sectionHeading: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1f2623',
+    letterSpacing: 1,
+    marginBottom: 6,
   },
   ratingGrid: {
     flexDirection: 'row',

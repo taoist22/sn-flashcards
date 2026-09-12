@@ -38,7 +38,6 @@ class InkSurfaceModule(private val reactContext: ReactApplicationContext) :
         // EinkPWInterface constants, decompiled from this firmware rather than guessed.
         private const val PENTYPE_PEN_1 = 2
         private const val DRAWOBJ_FREEHAND = 0
-        private const val ANTIALIAS_NOANTI = 0
         private const val PENCOLOR_BLACK = -16777216
 
         /** Route touches through the host with low latency so buttons still work. */
@@ -133,8 +132,12 @@ class InkSurfaceModule(private val reactContext: ReactApplicationContext) :
             set(e, "setPenStdWidth", java.lang.Float.TYPE,
                 if (penWidth > 0) penWidth.toFloat() else DEFAULT_PEN_WIDTH)
             set(e, "setPenColor", Integer.TYPE, if (penColor != 0) penColor else PENCOLOR_BLACK)
-            // Binary edges take the fast e-ink waveform; anti-aliased ones dither to mud.
-            set(e, "setDrawObjectPaintAntiAlias", Integer.TYPE, ANTIALIAS_NOANTI)
+            // Deliberately NOT forcing anti-aliasing off.
+            //
+            // NOANTI gives the crispest edges on a 16-grey panel, but it also flattened
+            // every pen type into the same stroke — the texture that distinguishes a
+            // pencil or brush from a pen lives in its anti-aliasing. Each PENTYPE_* brings
+            // its own default, so leave it alone and let the types actually differ.
             set(e, "setFingerWritable", java.lang.Boolean.TYPE, false)
             // The erase dwell indicator ghosts badly on e-ink.
             set(e, "disablePenEraseFloatFlower", java.lang.Boolean.TYPE, true)
