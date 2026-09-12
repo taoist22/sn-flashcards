@@ -788,6 +788,7 @@ function App(): React.JSX.Element {
   const guessPenType = db?.settings?.guessPenType ?? INK_DEFAULT_PEN_TYPE;
   const guessPenWidth = db?.settings?.guessPenWidth ?? INK_DEFAULT_PEN_WIDTH;
   const guessPenColor = db?.settings?.guessPenColor ?? INK_DEFAULT_PEN_COLOR;
+  const guessHand = db?.settings?.guessHand ?? 'right';
 
   const rateStudyCard = async (rating: Grade) => {
     if (!activeStudyCard) {
@@ -955,6 +956,17 @@ function App(): React.JSX.Element {
             penType={guessPenType}
             penWidth={guessPenWidth}
             penColor={guessPenColor}
+            hand={guessHand}
+            onToggleHand={async () => {
+              if (!db) {
+                return;
+              }
+              setDb(
+                await setGuessInkSettings(db, {
+                  guessHand: guessHand === 'right' ? 'left' : 'right',
+                }),
+              );
+            }}
             onCyclePen={async () => {
               if (!db) {
                 return;
@@ -1949,6 +1961,8 @@ function StudyScreen({
   penType,
   penWidth,
   penColor,
+  hand,
+  onToggleHand,
   onCyclePen,
   onCycleWidth,
   onCycleColor,
@@ -1967,6 +1981,8 @@ function StudyScreen({
   penType: number;
   penWidth: number;
   penColor: number;
+  hand: 'left' | 'right';
+  onToggleHand: () => void;
   onCyclePen: () => void;
   onCycleWidth: () => void;
   onCycleColor: () => void;
@@ -2005,6 +2021,10 @@ function StudyScreen({
     const tryActivate = async () => {
       if (cancelled) {
         return;
+      }
+      if (attempts === 0) {
+        // Full release first: re-binding a reused instance kept a stale writable region.
+        await deactivateInk();
       }
       const result = await activateInk(penType, penWidth, penColor);
       if (result === 'not-laid-out' && attempts < 12 && !cancelled) {
@@ -2141,9 +2161,30 @@ function StudyScreen({
                   {inkMode ? 'Type instead' : 'Write instead'}
                 </Text>
               </Pressable>
+              <Pressable onPress={onToggleHand} style={styles.penChip}>
+                <Text style={styles.penChipText}>
+                  {hand === 'right' ? 'Right-handed' : 'Left-handed'}
+                </Text>
+              </Pressable>
             </View>
           ) : null}
         </View>
+
+        {/*
+          Show Answer sits ABOVE the writing area and hard against the edge opposite the
+          writing hand. Full width below the surface, a resting palm triggered it.
+        */}
+        {inkMode && !showAnswer ? (
+          <View
+            style={[
+              styles.revealRow,
+              hand === 'right' ? styles.revealLeft : styles.revealRight,
+            ]}>
+            <Pressable onPress={onReveal} style={styles.revealButton}>
+              <Text style={styles.revealButtonText}>Show Answer</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {inkMode ? (
           <InkSurfaceView style={styles.inkSurface} />
@@ -2181,9 +2222,9 @@ function StudyScreen({
         ) : null}
       </View>
 
-      {!showAnswer ? (
+      {!showAnswer && !inkMode ? (
         <PrimaryButton label="Show Answer" onPress={onReveal} />
-      ) : (
+      ) : !showAnswer ? null : (
         <View style={styles.ratingGrid}>
           {([Rating.Again, Rating.Hard, Rating.Good, Rating.Easy] as Grade[]).map(
             rating => (
@@ -2555,7 +2596,11 @@ const styles = StyleSheet.create({
   // Capped so a hint reveal scrolls inside this box instead of pushing the ink surface
   // down — the engine must not see its host move or resize.
   questionScroll: {
-    maxHeight: 280,
+    // FIXED, not maxHeight. A block that sizes to its content puts the ink surface at a
+    // different Y on every card, and the engine's writable region is derived from the
+    // host's position when it binds — which produced a dead band, then no writable area
+    // at all on later cards.
+    height: 260,
   },
   guessHeader: {
     flexDirection: 'row',
@@ -2567,6 +2612,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginBottom: 6,
+  },
+  revealRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  revealLeft: {justifyContent: 'flex-start'},
+  revealRight: {justifyContent: 'flex-end'},
+  revealButton: {
+    backgroundColor: '#263832',
+    borderRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  revealButtonText: {
+    color: '#f7f7f2',
+    fontSize: 14,
+    fontWeight: '700',
   },
   penChip: {
     borderColor: '#9aa39c',

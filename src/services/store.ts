@@ -163,6 +163,7 @@ export const setGuessInkSettings = async (
     guessPenType?: number;
     guessPenWidth?: number;
     guessPenColor?: number;
+    guessHand?: 'left' | 'right';
   },
 ): Promise<FlashcardDatabase> => {
   const next = {

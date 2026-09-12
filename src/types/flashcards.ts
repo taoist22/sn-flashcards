@@ -62,6 +62,8 @@ export type FlashcardSettings = {
   guessPenType?: number;
   guessPenWidth?: number;
   guessPenColor?: number;
+  /** Which side the Show Answer button sits on, so it is away from the writing hand. */
+  guessHand?: 'left' | 'right';
 };
 
 export type FlashcardDatabase = {

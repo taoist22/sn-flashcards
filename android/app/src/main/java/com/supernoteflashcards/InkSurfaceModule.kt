@@ -115,6 +115,19 @@ class InkSurfaceModule(private val reactContext: ReactApplicationContext) :
             }
             engine = e
 
+            // Force the engine to re-read where its host actually is.
+            //
+            // The writable region is derived from the host's position in the window when
+            // the engine binds. Reusing an instance across cards left that stale, which
+            // showed up as a dead band in the middle of the surface and then, once the
+            // offset exceeded the surface height, no writable area at all. Changing pen
+            // type appeared to "fix" it only because that re-ran activation.
+            runCatching { e.javaClass.getMethod("onWindowChanged").invoke(e) }
+                .onFailure { android.util.Log.w("InkSurface", "onWindowChanged: ${it.cause ?: it}") }
+            // Stale fences would also carve out unwritable regions; we set none, but the
+            // instance is shared and cheap to clean.
+            runCatching { e.javaClass.getMethod("clearUnWriteRectList").invoke(e) }
+
             set(e, "setPenType", Integer.TYPE, if (penType > 0) penType else PENTYPE_PEN_1)
             set(e, "setDrawObjectType", Integer.TYPE, DRAWOBJ_FREEHAND)
             set(e, "setPenStdWidth", java.lang.Float.TYPE,
