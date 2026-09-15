@@ -22,11 +22,16 @@ import {
   createDeck,
   deckStats,
   deleteCard,
+  deleteCards,
   deleteDeck,
+  dueCardsForAllDecks,
   dueCardsForDeck,
   importCards,
   loadDatabase,
+  moveCards,
+  renameDeck,
   resolveIncludeInAnki,
+  restoreDatabase,
   reviewCard,
   setDefaultCaptureMode,
   setImageAttachMode,
@@ -34,6 +39,7 @@ import {
   updateCard,
   setGuessInkSettings,
 } from './src/services/store';
+import {backupDatabase, pickBackupFile} from './src/services/backup';
 import {InkSurfaceView} from './src/components/InkSurface';
 import {
   activateInk,
@@ -258,6 +264,11 @@ function App(): React.JSX.Element {
   const [importFiles, setImportFiles] = useState<string[]>([]);
   const [importFolder, setImportFolder] = useState('');
   const [pendingCapturedImage, setPendingCapturedImage] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
+  const [renamingDeckId, setRenamingDeckId] = useState<string | null>(null);
+  const [renameDeckNameInput, setRenameDeckNameInput] = useState('');
+  const [studyAllDecks, setStudyAllDecks] = useState(false);
   const screenRef = useRef<Screen>('decks');
   const pendingReplaceRef = useRef<'question' | 'answer' | null>(null);
 
@@ -271,12 +282,29 @@ function App(): React.JSX.Element {
     [db, selectedDeck],
   );
 
-  const dueCards = useMemo(
+  // Kept separate from studyDueCards below: this one always stays scoped to
+  // the selected deck, since it also drives the per-deck "N due" count shown
+  // on the Cards screen — that count must not follow studyAllDecks around.
+  const deckDueCards = useMemo(
     () => (db && selectedDeck ? dueCardsForDeck(db, selectedDeck.id) : []),
     [db, selectedDeck],
   );
 
-  const activeStudyCard = dueCards[0] ?? null;
+  const studyDueCards = useMemo(() => {
+    if (!db) {
+      return [];
+    }
+    return studyAllDecks ? dueCardsForAllDecks(db) : deckDueCards;
+  }, [db, studyAllDecks, deckDueCards]);
+
+  const activeStudyCard = studyDueCards[0] ?? null;
+
+  // Independent of studyAllDecks (which only affects what's shown once
+  // already studying) so the Decks screen always reads correctly.
+  const allDueCount = useMemo(
+    () => (db ? dueCardsForAllDecks(db).length : 0),
+    [db],
+  );
 
   const refresh = useCallback(async () => {
     const loaded = await loadDatabase();
@@ -607,10 +635,112 @@ function App(): React.JSX.Element {
     }
   };
 
-  const removeDeck = async (deck: Deck) => {
-    const next = await deleteDeck(requireDb(), deck.id);
+  const removeDeck = (deck: Deck) => {
+    const currentDb = requireDb();
+    const cardsInDeck = cardsForDeck(currentDb, deck.id);
+    Alert.alert(
+      `Delete "${deck.name}"?`,
+      `This permanently deletes ${cardsInDeck.length} card${
+        cardsInDeck.length === 1 ? '' : 's'
+      } and all of their review history. This cannot be undone.`,
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            cardsInDeck.forEach(card => {
+              deleteCardImage(card.questionImagePath);
+              deleteCardImage(card.answerImagePath);
+              deleteCardImage(card.contextImagePath);
+              deleteCardImage(card.hintImagePath);
+            });
+            const next = await deleteDeck(requireDb(), deck.id);
+            setDb(next);
+            setSelectedDeckId(next.decks[0]?.id ?? null);
+          },
+        },
+      ],
+    );
+  };
+
+  const startRenameDeck = (deck: Deck) => {
+    setRenamingDeckId(deck.id);
+    setRenameDeckNameInput(deck.name);
+  };
+
+  const cancelRenameDeck = () => {
+    setRenamingDeckId(null);
+    setRenameDeckNameInput('');
+  };
+
+  const confirmRenameDeck = async () => {
+    if (!renamingDeckId) {
+      return;
+    }
+    const next = await renameDeck(requireDb(), renamingDeckId, renameDeckNameInput);
     setDb(next);
-    setSelectedDeckId(next.decks[0]?.id ?? null);
+    setRenamingDeckId(null);
+    setRenameDeckNameInput('');
+  };
+
+  const startStudyAllDue = () => {
+    setStudyAllDecks(true);
+    setShowAnswer(false);
+    setShowHint(false);
+    setStudyGuess('');
+    setScreen('study');
+  };
+
+  const runBackup = async () => {
+    try {
+      const filePath = await backupDatabase(requireDb());
+      Alert.alert('Backup saved', `Saved to:\n${filePath}`);
+    } catch (error) {
+      Alert.alert(
+        'Backup failed',
+        error instanceof Error ? error.message : 'Could not save a backup.',
+      );
+    }
+  };
+
+  const runRestore = async () => {
+    try {
+      const picked = await pickBackupFile();
+      if (!picked) {
+        return;
+      }
+      Alert.alert(
+        'Restore from backup?',
+        'This replaces every deck, card, and review history currently on this device with what is in the backup file. This cannot be undone.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Restore',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const next = await restoreDatabase(picked.text);
+                setDb(next);
+                setSelectedDeckId(next.decks[0]?.id ?? null);
+                setScreen('decks');
+                Alert.alert('Restore complete', 'Your backup has been restored.');
+              } catch (error) {
+                Alert.alert(
+                  'Restore failed',
+                  error instanceof Error ? error.message : 'Could not restore that file.',
+                );
+              }
+            },
+          },
+        ],
+      );
+    } catch (error) {
+      Alert.alert(
+        'Restore failed',
+        error instanceof Error ? error.message : 'Could not read that file.',
+      );
+    }
   };
 
   const saveDraftCard = async () => {
@@ -691,6 +821,84 @@ function App(): React.JSX.Element {
   const removeCard = async (card: Flashcard) => {
     const next = await deleteCard(requireDb(), card.id);
     setDb(next);
+  };
+
+  const toggleSelectMode = () => {
+    setSelectMode(current => !current);
+    setSelectedCardIds(new Set());
+  };
+
+  const toggleCardSelection = (cardId: string) => {
+    setSelectedCardIds(current => {
+      const next = new Set(current);
+      if (next.has(cardId)) {
+        next.delete(cardId);
+      } else {
+        next.add(cardId);
+      }
+      return next;
+    });
+  };
+
+  // Operates on whatever's currently visible (post-search), not the whole
+  // deck, and only touches those ids — a prior selection outside the current
+  // search is left alone rather than silently cleared.
+  const toggleSelectAll = (visibleCards: Flashcard[]) => {
+    setSelectedCardIds(current => {
+      const visibleIds = visibleCards.map(card => card.id);
+      const allVisibleSelected =
+        visibleIds.length > 0 && visibleIds.every(id => current.has(id));
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        visibleIds.forEach(id => next.delete(id));
+      } else {
+        visibleIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const bulkDeleteSelected = () => {
+    const ids = Array.from(selectedCardIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const idSet = new Set(ids);
+    const cardsToRemove = deckCards.filter(card => idSet.has(card.id));
+    Alert.alert(
+      `Delete ${ids.length} card${ids.length === 1 ? '' : 's'}?`,
+      'This permanently deletes the selected cards and their review history. This cannot be undone.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            cardsToRemove.forEach(card => {
+              deleteCardImage(card.questionImagePath);
+              deleteCardImage(card.answerImagePath);
+              deleteCardImage(card.contextImagePath);
+              deleteCardImage(card.hintImagePath);
+            });
+            const next = await deleteCards(requireDb(), ids);
+            setDb(next);
+            setSelectedCardIds(new Set());
+            setSelectMode(false);
+          },
+        },
+      ],
+    );
+  };
+
+  const bulkMoveSelected = async (targetDeckId: string) => {
+    const ids = Array.from(selectedCardIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const next = await moveCards(requireDb(), ids, targetDeckId);
+    setDb(next);
+    setSelectedCardIds(new Set());
+    setSelectMode(false);
   };
 
   const exportSelectedDeck = async () => {
@@ -829,6 +1037,10 @@ function App(): React.JSX.Element {
 
       <ScrollView
         contentContainerStyle={styles.content}
+        // Without this, the first tap after typing in a TextInput is consumed
+        // dismissing keyboard/IME focus instead of hitting the control underneath —
+        // found the hard way in SNFolio, same single-outer-ScrollView shape.
+        keyboardShouldPersistTaps="handled"
         // Locked only while WRITING: the engine must not see its host move. Once the
         // answer is showing the engine is frozen, so scrolling down to the answer and the
         // rating buttons is safe — and necessary, since they sit below the surface.
@@ -864,9 +1076,21 @@ function App(): React.JSX.Element {
             onUnlinkNote={unlinkCurrentNote}
             onSelectDeck={deck => {
               setSelectedDeckId(deck.id);
+              setSelectMode(false);
+              setSelectedCardIds(new Set());
               setScreen('cards');
             }}
             onDeleteDeck={removeDeck}
+            renamingDeckId={renamingDeckId}
+            renameDeckNameInput={renameDeckNameInput}
+            onStartRename={startRenameDeck}
+            onChangeRenameName={setRenameDeckNameInput}
+            onConfirmRename={confirmRenameDeck}
+            onCancelRename={cancelRenameDeck}
+            allDueCount={allDueCount}
+            onStudyAllDue={startStudyAllDue}
+            onBackup={runBackup}
+            onRestore={runRestore}
           />
         )}
 
@@ -875,8 +1099,9 @@ function App(): React.JSX.Element {
             db={db}
             deck={selectedDeck}
             cards={deckCards}
-            dueCount={dueCards.length}
+            dueCount={deckDueCards.length}
             onStudy={() => {
+              setStudyAllDecks(false);
               setShowAnswer(false);
               setShowHint(false);
               setStudyGuess('');
@@ -893,6 +1118,13 @@ function App(): React.JSX.Element {
               setScreen('edit');
             }}
             onDelete={removeCard}
+            selectMode={selectMode}
+            selectedCardIds={selectedCardIds}
+            onToggleSelectMode={toggleSelectMode}
+            onToggleCardSelection={toggleCardSelection}
+            onToggleSelectAll={toggleSelectAll}
+            onBulkDelete={bulkDeleteSelected}
+            onBulkMove={bulkMoveSelected}
           />
         )}
 
@@ -1161,6 +1393,16 @@ function DeckScreen({
   onUnlinkNote,
   onSelectDeck,
   onDeleteDeck,
+  renamingDeckId,
+  renameDeckNameInput,
+  onStartRename,
+  onChangeRenameName,
+  onConfirmRename,
+  onCancelRename,
+  allDueCount,
+  onStudyAllDue,
+  onBackup,
+  onRestore,
 }: {
   db: FlashcardDatabase;
   selectedDeckId: string;
@@ -1177,6 +1419,16 @@ function DeckScreen({
   onUnlinkNote: () => void;
   onSelectDeck: (deck: Deck) => void;
   onDeleteDeck: (deck: Deck) => void;
+  renamingDeckId: string | null;
+  renameDeckNameInput: string;
+  onStartRename: (deck: Deck) => void;
+  onChangeRenameName: (name: string) => void;
+  onConfirmRename: () => void;
+  onCancelRename: () => void;
+  allDueCount: number;
+  onStudyAllDue: () => void;
+  onBackup: () => void;
+  onRestore: () => void;
 }) {
   const selectedDeck = db.decks.find(deck => deck.id === selectedDeckId) ?? db.decks[0];
   const linkedDeck = db.decks.find(deck => deck.id === noteMatch?.deckId);
@@ -1185,6 +1437,16 @@ function DeckScreen({
   return (
     <View>
       <Text style={styles.sectionTitle}>Decks</Text>
+
+      {allDueCount > 0 && (
+        <View style={styles.actions}>
+          <PrimaryButton
+            label={`Study All Due (${allDueCount})`}
+            onPress={onStudyAllDue}
+          />
+        </View>
+      )}
+
       <View style={styles.formBlock}>
         <Text style={styles.blockTitle}>Create Deck</Text>
         <View style={styles.createDeckRow}>
@@ -1234,6 +1496,30 @@ function DeckScreen({
       {db.decks.map(deck => {
         const stats = deckStats(db, deck.id);
         const selected = deck.id === selectedDeckId;
+
+        if (renamingDeckId === deck.id) {
+          return (
+            <View key={deck.id} style={styles.rowCard}>
+              <View style={styles.rowMain}>
+                <TextInput
+                  value={renameDeckNameInput}
+                  onChangeText={onChangeRenameName}
+                  placeholder="Deck name"
+                  placeholderTextColor="#74746c"
+                  style={styles.input}
+                  autoFocus
+                />
+              </View>
+              <Pressable onPress={onConfirmRename} style={styles.plainButton}>
+                <Text style={styles.linkButtonText}>Save</Text>
+              </Pressable>
+              <Pressable onPress={onCancelRename} style={styles.plainButton}>
+                <Text style={styles.muted}>Cancel</Text>
+              </Pressable>
+            </View>
+          );
+        }
+
         return (
           <Pressable
             key={deck.id}
@@ -1245,6 +1531,10 @@ function DeckScreen({
                 {stats.total} cards · {stats.due} due · {stats.reviewedToday} today
               </Text>
             </View>
+            <Text style={styles.chevron}>›</Text>
+            <Pressable onPress={() => onStartRename(deck)} style={styles.plainButton}>
+              <Text style={styles.linkButtonText}>Rename</Text>
+            </Pressable>
             {db.decks.length > 1 && (
               <Pressable onPress={() => onDeleteDeck(deck)} style={styles.plainButton}>
                 <Text style={styles.warningText}>Delete</Text>
@@ -1253,6 +1543,21 @@ function DeckScreen({
           </Pressable>
         );
       })}
+
+      <SectionCard title="Backup & Restore">
+        <Text style={styles.helperText}>
+          Backup saves every deck, card, and review history to a file. Restore replaces
+          everything currently on this device with what is in a chosen backup file.
+        </Text>
+        <View style={styles.imageSourceRow}>
+          <Pressable onPress={onBackup} style={styles.barButton}>
+            <Text style={styles.barButtonText}>Backup Now</Text>
+          </Pressable>
+          <Pressable onPress={onRestore} style={styles.barButton}>
+            <Text style={styles.barButtonText}>Restore from Backup</Text>
+          </Pressable>
+        </View>
+      </SectionCard>
     </View>
   );
 }
@@ -1268,6 +1573,13 @@ function CardsScreen({
   onExport,
   onEdit,
   onDelete,
+  selectMode,
+  selectedCardIds,
+  onToggleSelectMode,
+  onToggleCardSelection,
+  onToggleSelectAll,
+  onBulkDelete,
+  onBulkMove,
 }: {
   db: FlashcardDatabase;
   deck: Deck;
@@ -1279,6 +1591,13 @@ function CardsScreen({
   onExport: () => void;
   onEdit: (card: Flashcard) => void;
   onDelete: (card: Flashcard) => void;
+  selectMode: boolean;
+  selectedCardIds: Set<string>;
+  onToggleSelectMode: () => void;
+  onToggleCardSelection: (cardId: string) => void;
+  onToggleSelectAll: (visibleCards: Flashcard[]) => void;
+  onBulkDelete: () => void;
+  onBulkMove: (targetDeckId: string) => void;
 }) {
   const stats = deckStats(db, deck.id);
   // Same Nomad-vs-Manta detection FrameClip already uses: Supernote's device-type
@@ -1286,6 +1605,21 @@ function CardsScreen({
   const {width} = useWindowDimensions();
   const columns = width >= 1500 ? 4 : 3;
   const tileWidthPercent = `${100 / columns - 2}%` as const;
+  const [showMoveTargets, setShowMoveTargets] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const otherDecks = db.decks.filter(candidate => candidate.id !== deck.id);
+  const filteredCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return cards;
+    }
+    return cards.filter(
+      card =>
+        card.question.toLowerCase().includes(q) || card.answer.toLowerCase().includes(q),
+    );
+  }, [cards, searchQuery]);
+  const allSelected =
+    filteredCards.length > 0 && filteredCards.every(card => selectedCardIds.has(card.id));
 
   return (
     <View>
@@ -1297,27 +1631,119 @@ function CardsScreen({
       </View>
 
       <View style={styles.actions}>
-        <PrimaryButton label={dueCount > 0 ? 'Study Due' : 'Study'} onPress={onStudy} />
-        <SecondaryButton label="Add Manually" onPress={onManualAdd} />
         <View style={styles.actionRow}>
-          <SecondaryButton label="Import Anki Text" onPress={onImport} />
-          <SecondaryButton label="Export Deck" onPress={onExport} />
+          <View style={styles.actionRowItem}>
+            <PrimaryButton label={dueCount > 0 ? 'Study Due' : 'Study'} onPress={onStudy} />
+          </View>
+          <View style={styles.actionRowItem}>
+            <SecondaryButton label="Add Manually" onPress={onManualAdd} />
+          </View>
+        </View>
+        <View style={styles.actionRow}>
+          <View style={styles.actionRowItem}>
+            <SecondaryButton label="Import Anki Text" onPress={onImport} />
+          </View>
+          <View style={styles.actionRowItem}>
+            <SecondaryButton label="Export Deck" onPress={onExport} />
+          </View>
         </View>
       </View>
 
-      <Text style={styles.sectionTitle}>Cards</Text>
+      <View style={styles.cardsHeaderRow}>
+        <Text style={styles.sectionTitle}>Cards</Text>
+        {cards.length > 0 && (
+          <Pressable
+            onPress={() => {
+              setShowMoveTargets(false);
+              onToggleSelectMode();
+            }}
+            style={styles.smallButton}>
+            <Text style={styles.smallButtonText}>{selectMode ? 'Cancel' : 'Select'}</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {cards.length > 0 && (
+        <TextInput
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Search this deck's cards"
+          placeholderTextColor="#74746c"
+          style={[styles.input, styles.searchInput]}
+        />
+      )}
+
+      {selectMode && (
+        <View style={styles.selectBar}>
+          <Pressable
+            onPress={() => onToggleSelectAll(filteredCards)}
+            style={styles.smallButton}>
+            <Text style={styles.smallButtonText}>
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </Text>
+          </Pressable>
+          <Text style={styles.muted}>{selectedCardIds.size} selected</Text>
+        </View>
+      )}
+
+      {selectMode && selectedCardIds.size > 0 && (
+        <View style={styles.selectActionsBar}>
+          <View style={styles.imageSourceRow}>
+            <Pressable onPress={onBulkDelete} style={styles.dangerBarButton}>
+              <Text style={styles.dangerBarButtonText}>Delete Selected</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowMoveTargets(current => !current)}
+              style={styles.barButton}>
+              <Text style={styles.barButtonText}>Move to...</Text>
+            </Pressable>
+          </View>
+          {showMoveTargets && (
+            otherDecks.length === 0 ? (
+              <Text style={styles.helperText}>No other decks to move cards into.</Text>
+            ) : (
+              <DeckChooser
+                decks={otherDecks}
+                selectedDeckId=""
+                onSelect={targetDeckId => {
+                  setShowMoveTargets(false);
+                  onBulkMove(targetDeckId);
+                }}
+              />
+            )
+          )}
+        </View>
+      )}
+
       {cards.length === 0 ? (
         <Text style={styles.emptyText}>
           No cards yet. Use Add Manually here, or lasso two handwritten lines in a note and choose Add Flashcard.
         </Text>
+      ) : filteredCards.length === 0 ? (
+        <Text style={styles.emptyText}>No cards match your search.</Text>
       ) : (
         <View style={styles.cardGrid}>
-          {cards.map(card => {
+          {filteredCards.map(card => {
             const retention = getRetrievability(card.fsrs);
             const hasImage = card.questionMode === 'image' && card.questionImagePath;
+            const selected = selectedCardIds.has(card.id);
             return (
-              <View key={card.id} style={[styles.cardTile, {width: tileWidthPercent}]}>
-                <Pressable onPress={() => onEdit(card)}>
+              <View
+                key={card.id}
+                style={[
+                  styles.cardTile,
+                  {width: tileWidthPercent},
+                  selected && styles.cardTileSelected,
+                ]}>
+                <Pressable
+                  onPress={() =>
+                    selectMode ? onToggleCardSelection(card.id) : onEdit(card)
+                  }>
+                  {selectMode && (
+                    <View style={[styles.checkbox, selected && styles.checkboxChecked]}>
+                      {selected && <Text style={styles.checkboxMark}>✓</Text>}
+                    </View>
+                  )}
                   {hasImage ? (
                     <Image
                       source={{uri: `file://${card.questionImagePath}`}}
@@ -1331,14 +1757,21 @@ function CardsScreen({
                       </Text>
                     </View>
                   )}
-                  <Text style={styles.muted} numberOfLines={1}>
-                    {stateLabel(card.fsrs.state)} · due {formatDate(card.fsrs.due)}
-                    {retention == null ? '' : ` · ${Math.round(retention * 100)}%`}
-                  </Text>
+                  <View style={styles.cardTileFooterRow}>
+                    <Text
+                      style={[styles.muted, styles.cardTileFooterText]}
+                      numberOfLines={1}>
+                      {stateLabel(card.fsrs.state)} · due {formatDate(card.fsrs.due)}
+                      {retention == null ? '' : ` · ${Math.round(retention * 100)}%`}
+                    </Text>
+                    {!selectMode && <Text style={styles.chevron}>›</Text>}
+                  </View>
                 </Pressable>
-                <Pressable onPress={() => onDelete(card)} style={styles.plainButton}>
-                  <Text style={styles.warningText}>Delete</Text>
-                </Pressable>
+                {!selectMode && (
+                  <Pressable onPress={() => onDelete(card)} style={styles.plainButton}>
+                    <Text style={styles.warningText}>Delete</Text>
+                  </Pressable>
+                )}
               </View>
             );
           })}
@@ -2355,6 +2788,20 @@ const styles = StyleSheet.create({
   rowMain: {
     flex: 1,
   },
+  cardsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  selectActionsBar: {
+    marginBottom: 12,
+  },
   cardGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2367,6 +2814,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 8,
     marginBottom: 10,
+  },
+  cardTileSelected: {
+    borderColor: '#4d685f',
+    backgroundColor: '#edf3ef',
   },
   cardTileImage: {
     width: '100%',
@@ -2508,6 +2959,47 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  barButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 8,
+    backgroundColor: '#263832',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  barButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  dangerBarButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 8,
+    backgroundColor: '#8f3e35',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  dangerBarButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  chevron: {
+    fontSize: 20,
+    color: '#62665f',
+    fontWeight: '700',
+  },
+  cardTileFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cardTileFooterText: {
+    flex: 1,
+  },
   checkboxRow: {
     minHeight: 40,
     flexDirection: 'row',
@@ -2548,6 +3040,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 17,
     color: '#1f2623',
+  },
+  searchInput: {
+    marginBottom: 10,
   },
   textArea: {
     minHeight: 64,
@@ -2681,25 +3176,24 @@ const styles = StyleSheet.create({
   },
   statsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
     marginBottom: 14,
   },
   statBox: {
-    width: '48%',
+    flex: 1,
     backgroundColor: '#ffffff',
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#d7d7ce',
-    padding: 14,
+    padding: 8,
   },
   statValue: {
-    fontSize: 24,
+    fontSize: 18,
     color: '#1e2522',
     fontWeight: '800',
   },
   statLabel: {
-    fontSize: 13,
+    fontSize: 11,
     color: '#62665f',
     marginTop: 2,
   },
@@ -2710,6 +3204,9 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     gap: 10,
+  },
+  actionRowItem: {
+    flex: 1,
   },
   emptyText: {
     fontSize: 16,

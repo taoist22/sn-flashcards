@@ -117,7 +117,7 @@ const createDefaultDb = (): FlashcardDatabase => {
   };
 };
 
-const normalizeDb = (db: Partial<FlashcardDatabase>): FlashcardDatabase => {
+export const normalizeDb = (db: Partial<FlashcardDatabase>): FlashcardDatabase => {
   if (!Array.isArray(db.decks) || db.decks.length === 0) {
     return createDefaultDb();
   }
@@ -214,6 +214,31 @@ export const createDeck = async (
   return next;
 };
 
+export const renameDeck = async (
+  db: FlashcardDatabase,
+  deckId: string,
+  name: string,
+): Promise<FlashcardDatabase> => {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return db;
+  }
+
+  const now = nowIso();
+  const next = {
+    ...db,
+    decks: db.decks.map(deck =>
+      deck.id === deckId ? {...deck, name: trimmed, updatedAt: now} : deck,
+    ),
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+// Hard delete: removes the deck along with its cards and their review
+// history. Callers are responsible for confirming with the user first (this
+// is destructive and irreversible) and for cleaning up any image files
+// belonging to the removed cards before calling this.
 export const deleteDeck = async (
   db: FlashcardDatabase,
   deckId: string,
@@ -222,15 +247,48 @@ export const deleteDeck = async (
     return db;
   }
 
-  const remainingDecks = db.decks.filter(deck => deck.id !== deckId);
-  const fallbackDeckId = remainingDecks[0]?.id;
+  const removedCardIds = new Set(
+    db.cards.filter(card => card.deckId === deckId).map(card => card.id),
+  );
   const next = {
     ...db,
-    decks: remainingDecks,
-    cards: db.cards.map(card =>
-      card.deckId === deckId ? {...card, deckId: fallbackDeckId} : card,
-    ),
+    decks: db.decks.filter(deck => deck.id !== deckId),
+    cards: db.cards.filter(card => card.deckId !== deckId),
+    reviews: db.reviews.filter(review => !removedCardIds.has(review.cardId)),
     noteDefaults: db.noteDefaults.filter(item => item.deckId !== deckId),
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+// Bulk delete: same contract as deleteDeck regarding confirmation and image
+// cleanup being the caller's responsibility.
+export const deleteCards = async (
+  db: FlashcardDatabase,
+  cardIds: string[],
+): Promise<FlashcardDatabase> => {
+  const idSet = new Set(cardIds);
+  const next = {
+    ...db,
+    cards: db.cards.filter(card => !idSet.has(card.id)),
+    reviews: db.reviews.filter(review => !idSet.has(review.cardId)),
+  };
+  await saveDatabase(next);
+  return next;
+};
+
+export const moveCards = async (
+  db: FlashcardDatabase,
+  cardIds: string[],
+  targetDeckId: string,
+): Promise<FlashcardDatabase> => {
+  const idSet = new Set(cardIds);
+  const now = nowIso();
+  const next = {
+    ...db,
+    cards: db.cards.map(card =>
+      idSet.has(card.id) ? {...card, deckId: targetDeckId, updatedAt: now} : card,
+    ),
   };
   await saveDatabase(next);
   return next;
@@ -486,6 +544,11 @@ export const dueCardsForDeck = (
     .filter(card => card.deckId === deckId && new Date(card.fsrs.due) <= now)
     .sort((a, b) => a.fsrs.due.localeCompare(b.fsrs.due));
 
+export const dueCardsForAllDecks = (db: FlashcardDatabase, now = new Date()) =>
+  db.cards
+    .filter(card => new Date(card.fsrs.due) <= now)
+    .sort((a, b) => a.fsrs.due.localeCompare(b.fsrs.due));
+
 export const cardsForDeck = (db: FlashcardDatabase, deckId: string) =>
   db.cards
     .filter(card => card.deckId === deckId)
@@ -507,4 +570,38 @@ export const deckStats = (db: FlashcardDatabase, deckId: string) => {
     reviewedToday,
     reviews: reviews.length,
   };
+};
+
+export const serializeDatabase = (db: FlashcardDatabase): string =>
+  JSON.stringify(db, null, 2);
+
+// Stricter than normalizeDb's own fallback (which quietly substitutes a fresh
+// empty database for anything malformed — right for bootstrapping local
+// storage, wrong for a user-picked file, where that would silently wipe
+// their data with no error). Throws instead, so the caller can show it.
+export const parseBackupJson = (raw: string): FlashcardDatabase => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('That file is not valid JSON.');
+  }
+
+  const candidate = parsed as Partial<FlashcardDatabase> | null;
+  if (
+    typeof candidate !== 'object' ||
+    candidate === null ||
+    !Array.isArray(candidate.decks) ||
+    !Array.isArray(candidate.cards)
+  ) {
+    throw new Error('That file does not look like a Flashcards backup.');
+  }
+
+  return normalizeDb(candidate);
+};
+
+export const restoreDatabase = async (raw: string): Promise<FlashcardDatabase> => {
+  const next = parseBackupJson(raw);
+  await saveDatabase(next);
+  return next;
 };
